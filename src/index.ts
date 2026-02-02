@@ -701,6 +701,363 @@ Examples:
 );
 
 // =============================================================================
+// Zod Schemas - Products (V1 API)
+// =============================================================================
+
+/**
+ * GET /v1/products - List Products
+ * Verified parameters from Keap V1 OpenAPI documentation
+ */
+const ListProductsInputSchema = z.object({
+  active: z.boolean()
+    .optional()
+    .describe("Sets status of items to return (true for active, false for inactive)"),
+  
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+  
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListProductsInput = z.infer<typeof ListProductsInputSchema>;
+
+/**
+ * GET /v1/products/{product_id} - Get Single Product
+ */
+const GetProductInputSchema = z.object({
+  product_id: z.number()
+    .int()
+    .positive()
+    .describe("Product ID (path parameter)")
+}).strict();
+
+type GetProductInput = z.infer<typeof GetProductInputSchema>;
+
+// =============================================================================
+// Zod Schemas - Notes (V1 API)
+// =============================================================================
+
+/**
+ * GET /v1/notes - List Notes
+ * Verified parameters from Keap V1 OpenAPI documentation
+ */
+const ListNotesInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter based on the contact id assigned to the note"),
+  
+  user_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter based on the user id assigned to the note"),
+  
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+  
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListNotesInput = z.infer<typeof ListNotesInputSchema>;
+
+/**
+ * POST /v1/notes - Create Note
+ * Verified parameters from Keap V1 OpenAPI documentation
+ */
+const CreateNoteInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .describe("Contact ID to attach the note to (required)"),
+  
+  title: z.string()
+    .optional()
+    .describe("Note title (either title or body is required)"),
+  
+  body: z.string()
+    .optional()
+    .describe("Note body content (either title or body is required)"),
+  
+  type: z.enum(["Appointment", "Call", "Email", "Fax", "Letter", "Other"])
+    .optional()
+    .describe("Note type category"),
+  
+  user_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("User ID to assign the note to")
+}).strict();
+
+type CreateNoteInput = z.infer<typeof CreateNoteInputSchema>;
+
+// =============================================================================
+// Zod Schemas - Tasks (V1 API)
+// =============================================================================
+
+/**
+ * GET /v1/tasks - List Tasks
+ * Verified parameters from Keap V1 OpenAPI documentation
+ */
+const ListTasksInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter by contact ID"),
+  
+  user_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter by user ID"),
+  
+  completed: z.boolean()
+    .optional()
+    .describe("Sets completed status of items to return"),
+  
+  has_due_date: z.boolean()
+    .optional()
+    .describe("Filter by whether task has a due date"),
+  
+  order: z.string()
+    .optional()
+    .describe("Attribute to order items by"),
+  
+  since: z.string()
+    .optional()
+    .describe("Date to start searching from ex. 2017-01-01T22:17:59.039Z"),
+  
+  until: z.string()
+    .optional()
+    .describe("Date to search to ex. 2017-01-01T22:17:59.039Z"),
+  
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+  
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListTasksInput = z.infer<typeof ListTasksInputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 6: keap_list_products
+// API: GET /v1/products
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_products",
+  `List products in Keap CRM.
+
+API Endpoint: GET /v1/products
+
+Args:
+  - active (boolean, optional): Filter by active status (true/false)
+  - limit (integer, optional): Number of results to return
+  - offset (integer, optional): Number of results to skip
+
+Returns:
+  { products: [...], count, next, previous }`,
+  ListProductsInputSchema.shape,
+  async (params: ListProductsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      active: params.active,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/products",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 7: keap_get_product
+// API: GET /v1/products/{product_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_product",
+  `Retrieve a single product by ID from Keap CRM.
+
+API Endpoint: GET /v1/products/{product_id}
+
+Args:
+  - product_id (integer, required): Product ID
+
+Returns:
+  Full product object with pricing, subscription details, etc.`,
+  GetProductInputSchema.shape,
+  async (params: GetProductInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v1/products/${params.product_id}`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 8: keap_list_notes
+// API: GET /v1/notes
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_notes",
+  `List notes in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/notes
+
+Args:
+  - contact_id (integer, optional): Filter by contact ID
+  - user_id (integer, optional): Filter by user ID who created the note
+  - limit (integer, optional): Number of results to return
+  - offset (integer, optional): Number of results to skip`,
+  ListNotesInputSchema.shape,
+  async (params: ListNotesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      user_id: params.user_id,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/notes",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 9: keap_create_note
+// API: POST /v1/notes
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_note",
+  `Create a new note on a contact in Keap CRM.
+
+API Endpoint: POST /v1/notes
+
+Args:
+  - contact_id (integer, required): Contact ID to attach the note to
+  - title (string, optional): Note title
+  - body (string, optional): Note body content
+  - type (enum, optional): Note type - 'Appointment', 'Call', 'Email', etc.
+  - user_id (integer, optional): User ID to assign the note to`,
+  CreateNoteInputSchema.shape,
+  async (params: CreateNoteInput) => {
+    const body: Record<string, unknown> = {
+      contact_id: params.contact_id
+    };
+
+    if (params.title) body.title = params.title;
+    if (params.body) body.body = params.body;
+    if (params.type) body.type = params.type;
+    if (params.user_id) body.user_id = params.user_id;
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/notes",
+      method: "POST",
+      body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 10: keap_list_tasks
+// API: GET /v1/tasks
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_tasks",
+  `List tasks in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/tasks
+
+Args:
+  - contact_id (integer, optional): Filter by contact ID
+  - user_id (integer, optional): Filter by assigned user ID
+  - completed (boolean, optional): Filter by completed status
+  - has_due_date (boolean, optional): Filter by whether task has a due date
+  - since (string, optional): Date to start searching from
+  - until (string, optional): Date to search to
+  - limit (integer, optional): Number of results`,
+  ListTasksInputSchema.shape,
+  async (params: ListTasksInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      user_id: params.user_id,
+      completed: params.completed,
+      has_due_date: params.has_due_date,
+      order: params.order,
+      since: params.since,
+      until: params.until,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/tasks",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
 // Transport Handlers
 // =============================================================================
 
