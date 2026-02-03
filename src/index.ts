@@ -284,70 +284,7 @@ const GetContactInputSchema = z.object({
 
 type GetContactInput = z.infer<typeof GetContactInputSchema>;
 
-/**
- * POST /v1/contacts - Create Contact
- */
-const CreateContactInputSchema = z.object({
-  given_name: z.string()
-    .optional()
-    .describe("First name"),
-  
-  family_name: z.string()
-    .optional()
-    .describe("Last name"),
-  
-  email: z.string()
-    .email()
-    .optional()
-    .describe("Primary email address (will be added as EMAIL1)"),
-  
-  phone: z.string()
-    .optional()
-    .describe("Primary phone number (will be added as PHONE1)"),
-  
-  job_title: z.string()
-    .optional()
-    .describe("Job title"),
-  
-  company_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Company ID to link contact to"),
-  
-  owner_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("User ID of the contact owner"),
-  
-  lead_source_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Lead source ID"),
-  
-  opt_in_reason: z.string()
-    .optional()
-    .describe("Reason for opting in to email marketing"),
-  
-  website: z.string()
-    .optional()
-    .describe("Website URL"),
-  
-  time_zone: z.string()
-    .optional()
-    .describe("Time zone (e.g., America/New_York)"),
-  
-  source_type: z.enum([
-    "APPOINTMENT", "FORMAPIHOSTED", "FORMAPIINTERNAL", "WEBFORM", 
-    "INTERNALFORM", "LANDINGPAGE", "IMPORT", "MANUAL", "API", "OTHER", "UNKNOWN"
-  ])
-    .optional()
-    .describe("How the contact was created")
-}).strict();
 
-type CreateContactInput = z.infer<typeof CreateContactInputSchema>;
 
 // =============================================================================
 // Zod Schemas - Orders (V1 API)
@@ -526,87 +463,7 @@ Examples:
   }
 );
 
-// ---------------------------------------------------------------------------
-// TOOL 3: keap_create_contact
-// API: POST /v1/contacts
-// ---------------------------------------------------------------------------
-server.tool(
-  "keap_create_contact",
-  `Create a new contact in Keap CRM.
 
-API Endpoint: POST /v1/contacts
-
-Args:
-  - given_name (string, optional): First name
-  - family_name (string, optional): Last name
-  - email (string, optional): Primary email address
-  - phone (string, optional): Primary phone number
-  - job_title (string, optional): Job title
-  - company_id (integer, optional): Link to existing company
-  - owner_id (integer, optional): Assigned user ID
-  - lead_source_id (integer, optional): Lead source ID
-  - opt_in_reason (string, optional): Email opt-in reason
-  - website (string, optional): Website URL
-  - time_zone (string, optional): Time zone
-  - source_type (enum, optional): How contact was created
-
-Returns:
-  Created contact object with assigned ID.
-
-Examples:
-  - Basic: { "email": "john@example.com", "given_name": "John", "family_name": "Doe" }
-  - With company: { "email": "jane@acme.com", "given_name": "Jane", "company_id": 456 }`,
-  CreateContactInputSchema.shape,
-  async (params: CreateContactInput) => {
-    const body: Record<string, unknown> = {};
-
-    // Simple string fields
-    if (params.given_name) body.given_name = params.given_name;
-    if (params.family_name) body.family_name = params.family_name;
-    if (params.job_title) body.job_title = params.job_title;
-    if (params.website) body.website = params.website;
-    if (params.time_zone) body.time_zone = params.time_zone;
-    if (params.opt_in_reason) body.opt_in_reason = params.opt_in_reason;
-    if (params.source_type) body.source_type = params.source_type;
-
-    // Integer fields
-    if (params.owner_id) body.owner_id = params.owner_id;
-    if (params.lead_source_id) body.lead_source_id = params.lead_source_id;
-
-    // Email - convert to Keap API structure
-    if (params.email) {
-      body.email_addresses = [{
-        email: params.email,
-        field: "EMAIL1"
-      }];
-    }
-
-    // Phone - convert to Keap API structure
-    if (params.phone) {
-      body.phone_numbers = [{
-        number: params.phone,
-        field: "PHONE1"
-      }];
-    }
-
-    // Company - convert to Keap API structure
-    if (params.company_id) {
-      body.company = { id: params.company_id };
-    }
-
-    const response = await sendToMakeWebhook({
-      path: "/v1/contacts",
-      method: "POST",
-      body
-    });
-
-    const result = formatToolResponse(response);
-    return {
-      content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
-    };
-  }
-);
 
 // ---------------------------------------------------------------------------
 // TOOL 4: keap_list_orders
@@ -776,36 +633,7 @@ const ListNotesInputSchema = z.object({
 
 type ListNotesInput = z.infer<typeof ListNotesInputSchema>;
 
-/**
- * POST /v1/notes - Create Note
- * Verified parameters from Keap V1 OpenAPI documentation
- */
-const CreateNoteInputSchema = z.object({
-  contact_id: z.number()
-    .int()
-    .positive()
-    .describe("Contact ID to attach the note to (required)"),
-  
-  title: z.string()
-    .optional()
-    .describe("Note title (either title or body is required)"),
-  
-  body: z.string()
-    .optional()
-    .describe("Note body content (either title or body is required)"),
-  
-  type: z.enum(["Appointment", "Call", "Email", "Fax", "Letter", "Other"])
-    .optional()
-    .describe("Note type category"),
-  
-  user_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("User ID to assign the note to")
-}).strict();
 
-type CreateNoteInput = z.infer<typeof CreateNoteInputSchema>;
 
 // =============================================================================
 // Zod Schemas - Tasks (V1 API)
@@ -970,46 +798,7 @@ Args:
   }
 );
 
-// ---------------------------------------------------------------------------
-// TOOL 9: keap_create_note
-// API: POST /v1/notes
-// ---------------------------------------------------------------------------
-server.tool(
-  "keap_create_note",
-  `Create a new note on a contact in Keap CRM.
 
-API Endpoint: POST /v1/notes
-
-Args:
-  - contact_id (integer, required): Contact ID to attach the note to
-  - title (string, optional): Note title
-  - body (string, optional): Note body content
-  - type (enum, optional): Note type - 'Appointment', 'Call', 'Email', etc.
-  - user_id (integer, optional): User ID to assign the note to`,
-  CreateNoteInputSchema.shape,
-  async (params: CreateNoteInput) => {
-    const body: Record<string, unknown> = {
-      contact_id: params.contact_id
-    };
-
-    if (params.title) body.title = params.title;
-    if (params.body) body.body = params.body;
-    if (params.type) body.type = params.type;
-    if (params.user_id) body.user_id = params.user_id;
-
-    const response = await sendToMakeWebhook({
-      path: "/v1/notes",
-      method: "POST",
-      body
-    });
-
-    const result = formatToolResponse(response);
-    return {
-      content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
-    };
-  }
-);
 
 // ---------------------------------------------------------------------------
 // TOOL 10: keap_list_tasks
@@ -1061,57 +850,7 @@ Args:
 // Zod Schemas - Batch 3 (Companies, Tags, Tasks V1)
 // =============================================================================
 
-/**
- * POST /v1/tasks - Create Task
- * Verified from Keap V1 OpenAPI documentation
- */
-const CreateTaskInputSchema = z.object({
-  title: z.string()
-    .describe("Task title (required)"),
 
-  due_date: z.string()
-    .describe("Task due date in ISO 8601 format, e.g. 2025-03-15T10:00:00.000Z (required)"),
-
-  contact_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Contact ID to associate the task with"),
-
-  description: z.string()
-    .optional()
-    .describe("Task description"),
-
-  user_id: z.number()
-    .int()
-    .positive()
-    .optional()
-    .describe("User ID to assign the task to"),
-
-  completed: z.boolean()
-    .optional()
-    .describe("Whether the task is completed"),
-
-  priority: z.number()
-    .int()
-    .optional()
-    .describe("Task priority (integer)"),
-
-  type: z.string()
-    .optional()
-    .describe("Task type"),
-
-  remind_time: z.number()
-    .int()
-    .optional()
-    .describe("Minutes before due_date to show reminder. Accepted values: 5, 10, 15, 30, 60..."),
-
-  url: z.string()
-    .optional()
-    .describe("URL associated with the task")
-}).strict();
-
-type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
 
 /**
  * GET /v1/companies - List Companies
@@ -1196,75 +935,9 @@ const ListTagsInputSchema = z.object({
 
 type ListTagsInput = z.infer<typeof ListTagsInputSchema>;
 
-/**
- * POST /v1/contacts/{contactId}/tags - Apply Tags to Contact
- * Verified from Keap V1 OpenAPI documentation
- */
-const ApplyTagInputSchema = z.object({
-  contact_id: z.number()
-    .int()
-    .positive()
-    .describe("Contact ID to apply tags to (path parameter)"),
 
-  tag_ids: z.array(z.number().int().positive())
-    .min(1)
-    .describe("Array of Tag IDs to apply to the contact")
-}).strict();
 
-type ApplyTagInput = z.infer<typeof ApplyTagInputSchema>;
 
-// ---------------------------------------------------------------------------
-// TOOL 11: keap_create_task
-// API: POST /v1/tasks
-// ---------------------------------------------------------------------------
-server.tool(
-  "keap_create_task",
-  `Create a new task in Keap CRM.
-
-API Endpoint: POST /v1/tasks
-
-Args:
-  - title (string, required): Task title
-  - due_date (string, required): Due date in ISO 8601 format
-  - contact_id (integer, optional): Contact ID to associate with
-  - description (string, optional): Task description
-  - user_id (integer, optional): User ID to assign task to
-  - completed (boolean, optional): Whether the task is completed
-  - priority (integer, optional): Task priority
-  - type (string, optional): Task type`,
-  CreateTaskInputSchema.shape,
-  async (params: CreateTaskInput) => {
-    const body: Record<string, unknown> = {
-      title: params.title,
-      due_date: params.due_date
-    };
-
-    // Keap requires contact to be a nested object { id: 123 }
-    if (params.contact_id) {
-      body.contact = { id: params.contact_id };
-    }
-
-    if (params.description) body.description = params.description;
-    if (params.user_id) body.user_id = params.user_id;
-    if (params.completed !== undefined) body.completed = params.completed;
-    if (params.priority !== undefined) body.priority = params.priority;
-    if (params.type) body.type = params.type;
-    if (params.remind_time !== undefined) body.remind_time = params.remind_time;
-    if (params.url) body.url = params.url;
-
-    const response = await sendToMakeWebhook({
-      path: "/v1/tasks",
-      method: "POST",
-      body
-    });
-
-    const result = formatToolResponse(response);
-    return {
-      content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
-    };
-  }
-);
 
 // ---------------------------------------------------------------------------
 // TOOL 12: keap_list_companies
@@ -1381,36 +1054,7 @@ Args:
   }
 );
 
-// ---------------------------------------------------------------------------
-// TOOL 15: keap_apply_tag
-// API: POST /v1/contacts/{contactId}/tags
-// ---------------------------------------------------------------------------
-server.tool(
-  "keap_apply_tag",
-  `Apply one or more tags to a contact in Keap CRM.
 
-API Endpoint: POST /v1/contacts/{contactId}/tags
-
-Args:
-  - contact_id (integer, required): Contact ID to apply tags to
-  - tag_ids (array of integers, required): Tag IDs to apply`,
-  ApplyTagInputSchema.shape,
-  async (params: ApplyTagInput) => {
-    const response = await sendToMakeWebhook({
-      path: `/v1/contacts/${params.contact_id}/tags`,
-      method: "POST",
-      body: {
-        tagIds: params.tag_ids // API expects camelCase 'tagIds'
-      }
-    });
-
-    const result = formatToolResponse(response);
-    return {
-      content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
-    };
-  }
-);
 
 // =============================================================================
 // Zod Schemas - Batch 4 (Opportunities, Users, Update Contact)
@@ -1473,49 +1117,7 @@ const GetOpportunityInputSchema = z.object({
 
 type GetOpportunityInput = z.infer<typeof GetOpportunityInputSchema>;
 
-/**
- * PATCH /v1/contacts/{contactId} - Update Contact
- * Verified from Keap V1 OpenAPI documentation
- */
-const UpdateContactInputSchema = z.object({
-  contact_id: z.number()
-    .int()
-    .positive()
-    .describe("Contact ID to update (path parameter)"),
 
-  given_name: z.string().optional().describe("First name"),
-  family_name: z.string().optional().describe("Last name"),
-  middle_name: z.string().optional().describe("Middle name"),
-  preferred_name: z.string().optional().describe("Preferred/nickname"),
-  prefix: z.string().optional().describe("Name prefix"),
-  suffix: z.string().optional().describe("Name suffix"),
-  job_title: z.string().optional().describe("Job title"),
-  
-  owner_id: z.number().int().positive().optional().describe("User ID of the contact owner"),
-  lead_source_id: z.number().int().positive().optional().describe("Lead source ID"),
-  
-  website: z.string().optional().describe("Website URL"),
-  time_zone: z.string().optional().describe("Time zone"),
-  preferred_locale: z.string().optional().describe("Preferred locale"),
-  
-  spouse_name: z.string().optional().describe("Spouse name"),
-  anniversary: z.string().optional().describe("Anniversary date (yyyy-MM-dd)"),
-  birthday: z.string().optional().describe("Birthday in ISO 8601 format"),
-  
-  contact_type: z.string().optional().describe("Contact type"),
-  source_type: z.enum([
-    "APPOINTMENT", "FORMAPIHOSTED", "FORMAPIINTERNAL", "WEBFORM",
-    "INTERNALFORM", "LANDINGPAGE", "IMPORT", "MANUAL", "API", "OTHER", "UNKNOWN"
-  ]).optional().describe("How the contact was created"),
-  
-  opt_in_reason: z.string().optional().describe("Reason for opting in to email marketing"),
-  
-  email: z.string().optional().describe("Primary email address — convenience field"),
-  phone: z.string().optional().describe("Primary phone number — convenience field"),
-  company_id: z.number().int().positive().optional().describe("Company ID to link contact to")
-}).strict();
-
-type UpdateContactInput = z.infer<typeof UpdateContactInputSchema>;
 
 /**
  * GET /v1/users - List Users
@@ -1631,94 +1233,7 @@ Args:
   }
 );
 
-// ---------------------------------------------------------------------------
-// TOOL 18: keap_update_contact
-// API: PATCH /v1/contacts/{contactId}
-// ---------------------------------------------------------------------------
-server.tool(
-  "keap_update_contact",
-  `Update specific fields on a contact in Keap CRM.
 
-API Endpoint: PATCH /v1/contacts/{contactId}
-
-Args:
-  - contact_id (integer, required): Contact ID
-  - given_name, family_name, job_title (string, optional)
-  - email (string, optional): Updates EMAIL1
-  - phone (string, optional): Updates PHONE1
-  - owner_id (integer, optional): Reassign owner
-  - company_id (integer, optional): Link to company`,
-  UpdateContactInputSchema.shape,
-  async (params: UpdateContactInput) => {
-    const body: Record<string, unknown> = {};
-    const updateMask: string[] = [];
-
-    // Helper to process simple fields
-    const processField = (key: keyof UpdateContactInput, mask: string) => {
-      if (params[key] !== undefined) {
-        body[key] = params[key];
-        if (!updateMask.includes(mask)) updateMask.push(mask);
-      }
-    };
-
-    // Process all simple scalar fields
-    processField("given_name", "given_name");
-    processField("family_name", "family_name");
-    processField("middle_name", "middle_name");
-    processField("preferred_name", "preferred_name");
-    processField("prefix", "prefix");
-    processField("suffix", "suffix");
-    processField("job_title", "job_title");
-    processField("owner_id", "owner_id");
-    processField("lead_source_id", "lead_source_id");
-    processField("website", "website");
-    processField("time_zone", "time_zone");
-    processField("preferred_locale", "preferred_locale");
-    processField("spouse_name", "spouse_name");
-    processField("anniversary", "anniversary");
-    processField("birthday", "birthday");
-    processField("contact_type", "contact_type");
-    processField("source_type", "source_type");
-    processField("opt_in_reason", "opt_in_reason");
-
-    // Complex field: Email
-    if (params.email) {
-      body.email_addresses = [{ email: params.email, field: "EMAIL1" }];
-      if (!updateMask.includes("email_addresses")) updateMask.push("email_addresses");
-    }
-
-    // Complex field: Phone
-    if (params.phone) {
-      body.phone_numbers = [{ number: params.phone, field: "PHONE1" }];
-      if (!updateMask.includes("phone_numbers")) updateMask.push("phone_numbers");
-    }
-
-    // Complex field: Company
-    if (params.company_id) {
-      body.company = { id: params.company_id };
-      if (!updateMask.includes("company")) updateMask.push("company");
-    }
-
-    // Prepare query params with the required update_mask
-    const query_params: Record<string, string | undefined> = {};
-    if (updateMask.length > 0) {
-      query_params.update_mask = updateMask.join(",");
-    }
-
-    const response = await sendToMakeWebhook({
-      path: `/v1/contacts/${params.contact_id}`,
-      method: "PATCH",
-      query_params: Object.keys(query_params).length > 0 ? query_params : undefined,
-      body
-    });
-
-    const result = formatToolResponse(response);
-    return {
-      content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
-    };
-  }
-);
 
 // ---------------------------------------------------------------------------
 // TOOL 19: keap_list_users
