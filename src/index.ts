@@ -2233,6 +2233,169 @@ Args:
 );
 
 // =============================================================================
+// Zod Schemas - Batch 6: Final Tools (Emails, Pipeline Stages)
+// =============================================================================
+
+/**
+ * GET /v1/emails - List Emails
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListEmailsInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Optional Contact Id to find Emails for"),
+
+  email: z.string()
+    .optional()
+    .describe("Optional email address to query on"),
+
+  since_sent_date: z.string()
+    .optional()
+    .describe("Emails sent since this date (ISO 8601)."),
+
+  until_sent_date: z.string()
+    .optional()
+    .describe("Emails sent until this date (ISO 8601)"),
+
+  ordered: z.boolean()
+    .optional()
+    .describe("Set to false to turn off ORDER BY (may improve performance)"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListEmailsInput = z.infer<typeof ListEmailsInputSchema>;
+
+/**
+ * GET /v1/emails/{id} - Get Single Email
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetEmailInputSchema = z.object({
+  email_id: z.number()
+    .int()
+    .positive()
+    .describe("Email record ID (path parameter)")
+}).strict();
+
+type GetEmailInput = z.infer<typeof GetEmailInputSchema>;
+
+/**
+ * GET /v1/opportunity/stage_pipeline - List Opportunity Stage Pipeline
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListOpportunityStagesInputSchema = z.object({}).strict();
+
+type ListOpportunityStagesInput = z.infer<typeof ListOpportunityStagesInputSchema>;
+
+
+// ---------------------------------------------------------------------------
+// TOOL 28: keap_list_emails
+// API: GET /v1/emails
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_emails",
+  `List email records in Keap CRM.
+
+API Endpoint: GET /v1/emails
+
+Args:
+  - contact_id (integer, optional): Filter by contact ID
+  - email (string, optional): Filter by email address
+  - since_sent_date (string, optional): ISO 8601 date
+  - until_sent_date (string, optional): ISO 8601 date
+  - limit (integer, optional): Number of results`,
+  ListEmailsInputSchema.shape,
+  async (params: ListEmailsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      email: params.email,
+      since_sent_date: params.since_sent_date,
+      until_sent_date: params.until_sent_date,
+      ordered: params.ordered,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/emails",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 29: keap_get_email
+// API: GET /v1/emails/{id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_email",
+  `Retrieve a single email record by ID from Keap CRM.
+
+API Endpoint: GET /v1/emails/{id}
+
+Args:
+  - email_id (integer, required): Email record ID`,
+  GetEmailInputSchema.shape,
+  async (params: GetEmailInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v1/emails/${params.email_id}`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 30: keap_list_opportunity_stages
+// API: GET /v1/opportunity/stage_pipeline
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_opportunity_stages",
+  `List all opportunity stages with pipeline details.
+
+API Endpoint: GET /v1/opportunity/stage_pipeline
+
+No parameters required. Useful for finding stage_id values for opportunities.`,
+  ListOpportunityStagesInputSchema.shape,
+  async (_params: ListOpportunityStagesInput) => {
+    const response = await sendToMakeWebhook({
+      path: "/v1/opportunity/stage_pipeline",
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
 // Transport Handlers
 // =============================================================================
 
