@@ -1786,6 +1786,453 @@ Args:
 );
 
 // =============================================================================
+// Zod Schemas - Batch 5: Final GET-Only Tools (Files, Campaigns, Appointments)
+// =============================================================================
+
+/**
+ * GET /v1/files - List Files
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListFilesInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter based on Contact Id"),
+
+  name: z.string()
+    .optional()
+    .describe("Filter files based on name, supports wildcards (e.g. 'report*')"),
+
+  type: z.enum([
+    "Application", "Image", "Fax", "Attachment", "Ticket", "Contact",
+    "DigitalProduct", "Import", "Hidden", "WebForm", "StyledCart",
+    "ReSampledImage", "TemplateThumbnail", "Funnel", "LogoThumbnail",
+    "Unlayer", "BrandingCenterLogo"
+  ])
+    .optional()
+    .describe("Filter based on the type of file"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListFilesInput = z.infer<typeof ListFilesInputSchema>;
+
+/**
+ * GET /v1/files/{fileId} - Get Single File
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetFileInputSchema = z.object({
+  file_id: z.number()
+    .int()
+    .positive()
+    .describe("File ID (path parameter)"),
+
+  optional_properties: z.array(z.string())
+    .optional()
+    .describe("Extra fields to include, e.g. 'file_data' for content")
+}).strict();
+
+type GetFileInput = z.infer<typeof GetFileInputSchema>;
+
+/**
+ * GET /v1/transactions - List Transactions
+ * Verified from Keap V1 OpenAPI documentation
+ * NOTE: This endpoint is deprecated but currently functional.
+ */
+const ListTransactionsInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Returns transactions for the provided contact id"),
+
+  since: z.string()
+    .optional()
+    .describe("Date to start searching from ex. 2017-01-01T00:00:00.000Z"),
+
+  until: z.string()
+    .optional()
+    .describe("Date to search to ex. 2017-01-01T00:00:00.000Z"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListTransactionsInput = z.infer<typeof ListTransactionsInputSchema>;
+
+/**
+ * GET /v1/campaigns - List Campaigns
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListCampaignsInputSchema = z.object({
+  search_text: z.string()
+    .optional()
+    .describe("Optional text to search campaigns"),
+
+  order: z.enum([
+    "id", "name", "published_date", "completed_contact_count",
+    "active_contact_count", "date_created", "last_updated", "category", "status"
+  ])
+    .optional()
+    .describe("Attribute to order items by"),
+
+  order_direction: z.enum(["ASCENDING", "DESCENDING"])
+    .optional()
+    .describe("How to order the data i.e. ascending (A-Z) or descending (Z-A)"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListCampaignsInput = z.infer<typeof ListCampaignsInputSchema>;
+
+/**
+ * GET /v1/campaigns/{campaignId} - Get Single Campaign
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetCampaignInputSchema = z.object({
+  campaign_id: z.number()
+    .int()
+    .positive()
+    .describe("Campaign ID (path parameter)"),
+
+  optional_properties: z.array(z.string())
+    .optional()
+    .describe("Extra fields to include, e.g. 'goals', 'sequences'")
+}).strict();
+
+type GetCampaignInput = z.infer<typeof GetCampaignInputSchema>;
+
+/**
+ * GET /v1/appointments - List Appointments
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListAppointmentsInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Optionally find appointments with a contact"),
+
+  since: z.string()
+    .optional()
+    .describe("Date to start searching from ex. 2017-01-01T00:00:00.000Z"),
+
+  until: z.string()
+    .optional()
+    .describe("Date to search to ex. 2017-01-01T00:00:00.000Z"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListAppointmentsInput = z.infer<typeof ListAppointmentsInputSchema>;
+
+/**
+ * GET /v1/appointments/{appointmentId} - Get Single Appointment
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetAppointmentInputSchema = z.object({
+  appointment_id: z.number()
+    .int()
+    .positive()
+    .describe("Appointment ID (path parameter)")
+}).strict();
+
+type GetAppointmentInput = z.infer<typeof GetAppointmentInputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 21: keap_list_files
+// API: GET /v1/files
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_files",
+  `List files in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/files
+
+Args:
+  - contact_id (integer, optional): Filter by contact ID
+  - name (string, optional): Filter by name, supports wildcards
+  - type (enum, optional): File type (Application, Image, Fax, Attachment, etc.)
+  - limit (integer, optional): Number of results to return`,
+  ListFilesInputSchema.shape,
+  async (params: ListFilesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      name: params.name,
+      type: params.type,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/files",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 22: keap_get_file
+// API: GET /v1/files/{fileId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_file",
+  `Retrieve metadata for a specific file in Keap CRM.
+
+API Endpoint: GET /v1/files/{fileId}
+
+Args:
+  - file_id (integer, required): File ID
+  - optional_properties (array, optional): Extra fields like 'file_data'`,
+  GetFileInputSchema.shape,
+  async (params: GetFileInput) => {
+    const query_params: Record<string, string | undefined> = {};
+
+    if (params.optional_properties && params.optional_properties.length > 0) {
+      query_params.optional_properties = params.optional_properties.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/files/${params.file_id}`,
+      method: "GET",
+      query_params: Object.keys(query_params).length > 0 ? query_params : undefined
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 23: keap_list_transactions
+// API: GET /v1/transactions
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_transactions",
+  `List transactions in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/transactions
+NOTE: This endpoint is deprecated but currently functional.
+
+Args:
+  - contact_id (integer, optional): Filter by contact ID
+  - since (string, optional): Date to start searching from
+  - until (string, optional): Date to search to
+  - limit (integer, optional): Number of results to return`,
+  ListTransactionsInputSchema.shape,
+  async (params: ListTransactionsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      since: params.since,
+      until: params.until,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/transactions",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 24: keap_list_campaigns
+// API: GET /v1/campaigns
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_campaigns",
+  `List marketing automation campaigns in Keap CRM.
+
+API Endpoint: GET /v1/campaigns
+
+Args:
+  - search_text (string, optional): Text to search campaigns
+  - order (enum, optional): Sort by 'id', 'name', 'status', etc.
+  - limit (integer, optional): Number of results to return`,
+  ListCampaignsInputSchema.shape,
+  async (params: ListCampaignsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      search_text: params.search_text,
+      order: params.order,
+      order_direction: params.order_direction,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/campaigns",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 25: keap_get_campaign
+// API: GET /v1/campaigns/{campaignId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_campaign",
+  `Retrieve a single campaign by ID from Keap CRM.
+
+API Endpoint: GET /v1/campaigns/{campaignId}
+
+Args:
+  - campaign_id (integer, required): Campaign ID
+  - optional_properties (array, optional): Extra fields like 'goals', 'sequences'`,
+  GetCampaignInputSchema.shape,
+  async (params: GetCampaignInput) => {
+    const query_params: Record<string, string | undefined> = {};
+
+    if (params.optional_properties && params.optional_properties.length > 0) {
+      query_params.optional_properties = params.optional_properties.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/campaigns/${params.campaign_id}`,
+      method: "GET",
+      query_params: Object.keys(query_params).length > 0 ? query_params : undefined
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 26: keap_list_appointments
+// API: GET /v1/appointments
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_appointments",
+  `List appointments in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/appointments
+
+Args:
+  - contact_id (integer, optional): Find appointments with a specific contact
+  - since (string, optional): Date to start searching from
+  - until (string, optional): Date to search to
+  - limit (integer, optional): Number of results to return`,
+  ListAppointmentsInputSchema.shape,
+  async (params: ListAppointmentsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      contact_id: params.contact_id,
+      since: params.since,
+      until: params.until,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/appointments",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 27: keap_get_appointment
+// API: GET /v1/appointments/{appointmentId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_appointment",
+  `Retrieve a single appointment by ID from Keap CRM.
+
+API Endpoint: GET /v1/appointments/{appointmentId}
+
+Args:
+  - appointment_id (integer, required): Appointment ID`,
+  GetAppointmentInputSchema.shape,
+  async (params: GetAppointmentInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v1/appointments/${params.appointment_id}`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
 // Transport Handlers
 // =============================================================================
 
