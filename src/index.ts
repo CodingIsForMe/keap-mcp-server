@@ -1058,6 +1058,361 @@ Args:
 );
 
 // =============================================================================
+// Zod Schemas - Batch 3 (Companies, Tags, Tasks V1)
+// =============================================================================
+
+/**
+ * POST /v1/tasks - Create Task
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const CreateTaskInputSchema = z.object({
+  title: z.string()
+    .describe("Task title (required)"),
+
+  due_date: z.string()
+    .describe("Task due date in ISO 8601 format, e.g. 2025-03-15T10:00:00.000Z (required)"),
+
+  contact_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Contact ID to associate the task with"),
+
+  description: z.string()
+    .optional()
+    .describe("Task description"),
+
+  user_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("User ID to assign the task to"),
+
+  completed: z.boolean()
+    .optional()
+    .describe("Whether the task is completed"),
+
+  priority: z.number()
+    .int()
+    .optional()
+    .describe("Task priority (integer)"),
+
+  type: z.string()
+    .optional()
+    .describe("Task type"),
+
+  remind_time: z.number()
+    .int()
+    .optional()
+    .describe("Minutes before due_date to show reminder. Accepted values: 5, 10, 15, 30, 60..."),
+
+  url: z.string()
+    .optional()
+    .describe("URL associated with the task")
+}).strict();
+
+type CreateTaskInput = z.infer<typeof CreateTaskInputSchema>;
+
+/**
+ * GET /v1/companies - List Companies
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListCompaniesInputSchema = z.object({
+  company_name: z.string()
+    .optional()
+    .describe("Optional company name to query on"),
+
+  order: z.enum(["id", "date_created", "name", "email"])
+    .optional()
+    .describe("Attribute to order items by"),
+
+  order_direction: z.enum(["ASCENDING", "DESCENDING"])
+    .optional()
+    .describe("How to order the data i.e. ascending (A-Z) or descending (Z-A)"),
+
+  optional_properties: z.array(z.string())
+    .optional()
+    .describe("Extra fields to include: notes, fax_number, custom_fields, etc."),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListCompaniesInput = z.infer<typeof ListCompaniesInputSchema>;
+
+/**
+ * GET /v1/companies/{companyId} - Get Single Company
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetCompanyInputSchema = z.object({
+  company_id: z.number()
+    .int()
+    .positive()
+    .describe("Company ID (path parameter)"),
+
+  optional_properties: z.array(z.string())
+    .optional()
+    .describe("Extra fields to include: notes, fax_number, custom_fields, etc.")
+}).strict();
+
+type GetCompanyInput = z.infer<typeof GetCompanyInputSchema>;
+
+/**
+ * GET /v1/tags - List Tags
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListTagsInputSchema = z.object({
+  name: z.string()
+    .optional()
+    .describe("Filter for tags with a specific name"),
+
+  category: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Category Id of tags to filter by"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListTagsInput = z.infer<typeof ListTagsInputSchema>;
+
+/**
+ * POST /v1/contacts/{contactId}/tags - Apply Tags to Contact
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ApplyTagInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .describe("Contact ID to apply tags to (path parameter)"),
+
+  tag_ids: z.array(z.number().int().positive())
+    .min(1)
+    .describe("Array of Tag IDs to apply to the contact")
+}).strict();
+
+type ApplyTagInput = z.infer<typeof ApplyTagInputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 11: keap_create_task
+// API: POST /v1/tasks
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_task",
+  `Create a new task in Keap CRM.
+
+API Endpoint: POST /v1/tasks
+
+Args:
+  - title (string, required): Task title
+  - due_date (string, required): Due date in ISO 8601 format
+  - contact_id (integer, optional): Contact ID to associate with
+  - description (string, optional): Task description
+  - user_id (integer, optional): User ID to assign task to
+  - completed (boolean, optional): Whether the task is completed
+  - priority (integer, optional): Task priority
+  - type (string, optional): Task type`,
+  CreateTaskInputSchema.shape,
+  async (params: CreateTaskInput) => {
+    const body: Record<string, unknown> = {
+      title: params.title,
+      due_date: params.due_date
+    };
+
+    // Keap requires contact to be a nested object { id: 123 }
+    if (params.contact_id) {
+      body.contact = { id: params.contact_id };
+    }
+
+    if (params.description) body.description = params.description;
+    if (params.user_id) body.user_id = params.user_id;
+    if (params.completed !== undefined) body.completed = params.completed;
+    if (params.priority !== undefined) body.priority = params.priority;
+    if (params.type) body.type = params.type;
+    if (params.remind_time !== undefined) body.remind_time = params.remind_time;
+    if (params.url) body.url = params.url;
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/tasks",
+      method: "POST",
+      body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 12: keap_list_companies
+// API: GET /v1/companies
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_companies",
+  `List companies in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/companies
+
+Args:
+  - company_name (string, optional): Company name to query on
+  - order (enum, optional): Sort by - 'id', 'date_created', 'name', 'email'
+  - limit (integer, optional): Number of results to return
+  - offset (integer, optional): Number of results to skip`,
+  ListCompaniesInputSchema.shape,
+  async (params: ListCompaniesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      company_name: params.company_name,
+      order: params.order,
+      order_direction: params.order_direction,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    if (params.optional_properties && params.optional_properties.length > 0) {
+      query_params.optional_properties = params.optional_properties.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/companies",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 13: keap_get_company
+// API: GET /v1/companies/{companyId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_company",
+  `Retrieve a single company by ID from Keap CRM.
+
+API Endpoint: GET /v1/companies/{companyId}
+
+Args:
+  - company_id (integer, required): Company ID
+  - optional_properties (array, optional): Extra fields like 'notes', 'fax_number'`,
+  GetCompanyInputSchema.shape,
+  async (params: GetCompanyInput) => {
+    const query_params: Record<string, string | undefined> = {};
+
+    if (params.optional_properties && params.optional_properties.length > 0) {
+      query_params.optional_properties = params.optional_properties.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/companies/${params.company_id}`,
+      method: "GET",
+      query_params: Object.keys(query_params).length > 0 ? query_params : undefined
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 14: keap_list_tags
+// API: GET /v1/tags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_tags",
+  `List tags defined in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/tags
+
+Args:
+  - name (string, optional): Filter for tags with a specific name
+  - category (integer, optional): Category Id of tags to filter by
+  - limit (integer, optional): Number of results to return`,
+  ListTagsInputSchema.shape,
+  async (params: ListTagsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      name: params.name,
+      category: params.category,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/tags",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 15: keap_apply_tag
+// API: POST /v1/contacts/{contactId}/tags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_apply_tag",
+  `Apply one or more tags to a contact in Keap CRM.
+
+API Endpoint: POST /v1/contacts/{contactId}/tags
+
+Args:
+  - contact_id (integer, required): Contact ID to apply tags to
+  - tag_ids (array of integers, required): Tag IDs to apply`,
+  ApplyTagInputSchema.shape,
+  async (params: ApplyTagInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v1/contacts/${params.contact_id}/tags`,
+      method: "POST",
+      body: {
+        tagIds: params.tag_ids // API expects camelCase 'tagIds'
+      }
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
 // Transport Handlers
 // =============================================================================
 
