@@ -1413,6 +1413,379 @@ Args:
 );
 
 // =============================================================================
+// Zod Schemas - Batch 4 (Opportunities, Users, Update Contact)
+// =============================================================================
+
+/**
+ * GET /v1/opportunities - List Opportunities
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListOpportunitiesInputSchema = z.object({
+  search_term: z.string()
+    .optional()
+    .describe("Search opportunities matching contact given_name, family_name, or title"),
+
+  stage_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Returns opportunities for the provided stage id"),
+
+  user_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Returns opportunities for the provided user id"),
+
+  order: z.enum(["next_action", "opportunity_name", "contact_name", "date_created"])
+    .optional()
+    .describe("Attribute to order items by"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListOpportunitiesInput = z.infer<typeof ListOpportunitiesInputSchema>;
+
+/**
+ * GET /v1/opportunities/{opportunityId} - Get Single Opportunity
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const GetOpportunityInputSchema = z.object({
+  opportunity_id: z.number()
+    .int()
+    .positive()
+    .describe("Opportunity ID (path parameter)"),
+
+  optional_properties: z.array(z.string())
+    .optional()
+    .describe("Extra fields to include, e.g. 'custom_fields'")
+}).strict();
+
+type GetOpportunityInput = z.infer<typeof GetOpportunityInputSchema>;
+
+/**
+ * PATCH /v1/contacts/{contactId} - Update Contact
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const UpdateContactInputSchema = z.object({
+  contact_id: z.number()
+    .int()
+    .positive()
+    .describe("Contact ID to update (path parameter)"),
+
+  given_name: z.string().optional().describe("First name"),
+  family_name: z.string().optional().describe("Last name"),
+  middle_name: z.string().optional().describe("Middle name"),
+  preferred_name: z.string().optional().describe("Preferred/nickname"),
+  prefix: z.string().optional().describe("Name prefix"),
+  suffix: z.string().optional().describe("Name suffix"),
+  job_title: z.string().optional().describe("Job title"),
+  
+  owner_id: z.number().int().positive().optional().describe("User ID of the contact owner"),
+  lead_source_id: z.number().int().positive().optional().describe("Lead source ID"),
+  
+  website: z.string().optional().describe("Website URL"),
+  time_zone: z.string().optional().describe("Time zone"),
+  preferred_locale: z.string().optional().describe("Preferred locale"),
+  
+  spouse_name: z.string().optional().describe("Spouse name"),
+  anniversary: z.string().optional().describe("Anniversary date (yyyy-MM-dd)"),
+  birthday: z.string().optional().describe("Birthday in ISO 8601 format"),
+  
+  contact_type: z.string().optional().describe("Contact type"),
+  source_type: z.enum([
+    "APPOINTMENT", "FORMAPIHOSTED", "FORMAPIINTERNAL", "WEBFORM",
+    "INTERNALFORM", "LANDINGPAGE", "IMPORT", "MANUAL", "API", "OTHER", "UNKNOWN"
+  ]).optional().describe("How the contact was created"),
+  
+  opt_in_reason: z.string().optional().describe("Reason for opting in to email marketing"),
+  
+  email: z.string().optional().describe("Primary email address — convenience field"),
+  phone: z.string().optional().describe("Primary phone number — convenience field"),
+  company_id: z.number().int().positive().optional().describe("Company ID to link contact to")
+}).strict();
+
+type UpdateContactInput = z.infer<typeof UpdateContactInputSchema>;
+
+/**
+ * GET /v1/users - List Users
+ * Verified from Keap V1 OpenAPI documentation
+ */
+const ListUsersInputSchema = z.object({
+  include_inactive: z.boolean()
+    .optional()
+    .describe("Include users that are Inactive in results, defaults to TRUE"),
+
+  include_partners: z.boolean()
+    .optional()
+    .describe("Include partner users in results, defaults to TRUE"),
+
+  limit: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Sets a total of items to return"),
+
+  offset: z.number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Sets a beginning range of items to return")
+}).strict();
+
+type ListUsersInput = z.infer<typeof ListUsersInputSchema>;
+
+/**
+ * GET /v2/users/{user_id} - Get Single User
+ * ⚠️ V2 API — there is no GET user-by-ID endpoint in V1
+ */
+const GetUserInputSchema = z.object({
+  user_id: z.string()
+    .describe("User ID (path parameter, string in V2 API)")
+}).strict();
+
+type GetUserInput = z.infer<typeof GetUserInputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 16: keap_list_opportunities
+// API: GET /v1/opportunities
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_opportunities",
+  `List opportunities in Keap CRM with optional filtering.
+
+API Endpoint: GET /v1/opportunities
+
+Args:
+  - search_term (string, optional): Search by contact name, company, or title
+  - stage_id (integer, optional): Filter by pipeline stage ID
+  - user_id (integer, optional): Filter by assigned user ID
+  - limit (integer, optional): Number of results`,
+  ListOpportunitiesInputSchema.shape,
+  async (params: ListOpportunitiesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      search_term: params.search_term,
+      stage_id: params.stage_id,
+      user_id: params.user_id,
+      order: params.order,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/opportunities",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 17: keap_get_opportunity
+// API: GET /v1/opportunities/{opportunityId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_opportunity",
+  `Retrieve a single opportunity by ID from Keap CRM.
+
+API Endpoint: GET /v1/opportunities/{opportunityId}
+
+Args:
+  - opportunity_id (integer, required): Opportunity ID
+  - optional_properties (array, optional): Extra fields like 'custom_fields'`,
+  GetOpportunityInputSchema.shape,
+  async (params: GetOpportunityInput) => {
+    const query_params: Record<string, string | undefined> = {};
+
+    if (params.optional_properties && params.optional_properties.length > 0) {
+      query_params.optional_properties = params.optional_properties.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/opportunities/${params.opportunity_id}`,
+      method: "GET",
+      query_params: Object.keys(query_params).length > 0 ? query_params : undefined
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 18: keap_update_contact
+// API: PATCH /v1/contacts/{contactId}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_contact",
+  `Update specific fields on a contact in Keap CRM.
+
+API Endpoint: PATCH /v1/contacts/{contactId}
+
+Args:
+  - contact_id (integer, required): Contact ID
+  - given_name, family_name, job_title (string, optional)
+  - email (string, optional): Updates EMAIL1
+  - phone (string, optional): Updates PHONE1
+  - owner_id (integer, optional): Reassign owner
+  - company_id (integer, optional): Link to company`,
+  UpdateContactInputSchema.shape,
+  async (params: UpdateContactInput) => {
+    const body: Record<string, unknown> = {};
+    const updateMask: string[] = [];
+
+    // Helper to process simple fields
+    const processField = (key: keyof UpdateContactInput, mask: string) => {
+      if (params[key] !== undefined) {
+        body[key] = params[key];
+        if (!updateMask.includes(mask)) updateMask.push(mask);
+      }
+    };
+
+    // Process all simple scalar fields
+    processField("given_name", "given_name");
+    processField("family_name", "family_name");
+    processField("middle_name", "middle_name");
+    processField("preferred_name", "preferred_name");
+    processField("prefix", "prefix");
+    processField("suffix", "suffix");
+    processField("job_title", "job_title");
+    processField("owner_id", "owner_id");
+    processField("lead_source_id", "lead_source_id");
+    processField("website", "website");
+    processField("time_zone", "time_zone");
+    processField("preferred_locale", "preferred_locale");
+    processField("spouse_name", "spouse_name");
+    processField("anniversary", "anniversary");
+    processField("birthday", "birthday");
+    processField("contact_type", "contact_type");
+    processField("source_type", "source_type");
+    processField("opt_in_reason", "opt_in_reason");
+
+    // Complex field: Email
+    if (params.email) {
+      body.email_addresses = [{ email: params.email, field: "EMAIL1" }];
+      if (!updateMask.includes("email_addresses")) updateMask.push("email_addresses");
+    }
+
+    // Complex field: Phone
+    if (params.phone) {
+      body.phone_numbers = [{ number: params.phone, field: "PHONE1" }];
+      if (!updateMask.includes("phone_numbers")) updateMask.push("phone_numbers");
+    }
+
+    // Complex field: Company
+    if (params.company_id) {
+      body.company = { id: params.company_id };
+      if (!updateMask.includes("company")) updateMask.push("company");
+    }
+
+    // Prepare query params with the required update_mask
+    const query_params: Record<string, string | undefined> = {};
+    if (updateMask.length > 0) {
+      query_params.update_mask = updateMask.join(",");
+    }
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/contacts/${params.contact_id}`,
+      method: "PATCH",
+      query_params: Object.keys(query_params).length > 0 ? query_params : undefined,
+      body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 19: keap_list_users
+// API: GET /v1/users
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_users",
+  `List users in Keap CRM.
+
+API Endpoint: GET /v1/users
+
+Args:
+  - include_inactive (boolean, optional): Include inactive users
+  - include_partners (boolean, optional): Include partner users
+  - limit (integer, optional): Number of results`,
+  ListUsersInputSchema.shape,
+  async (params: ListUsersInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      include_inactive: params.include_inactive,
+      include_partners: params.include_partners,
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v1/users",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 20: keap_get_user
+// API: GET /v2/users/{user_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_user",
+  `Retrieve a single user by ID from Keap CRM.
+
+API Endpoint: GET /v2/users/{user_id}
+⚠️ Note: Uses V2 API.
+
+Args:
+  - user_id (string, required): User ID`,
+  GetUserInputSchema.shape,
+  async (params: GetUserInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/users/${params.user_id}`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
 // Transport Handlers
 // =============================================================================
 
