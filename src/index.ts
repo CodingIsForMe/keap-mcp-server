@@ -21,7 +21,8 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import express from "express";
 import { z } from "zod";
 
 // =============================================================================
@@ -1914,26 +1915,43 @@ No parameters required. Useful for finding stage_id values for opportunities.`,
 // Transport Handlers
 // =============================================================================
 
-async function runStdio(): Promise<void> {
+async function runServer() {
   if (!MAKE_WEBHOOK_URL) {
     console.error("ERROR: MAKE_WEBHOOK_URL environment variable is required.");
     console.error("  export MAKE_WEBHOOK_URL=https://hook.make.com/your-webhook-id");
     process.exit(1);
   }
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  
-  console.error(`${SERVER_NAME} v${SERVER_VERSION} started (stdio)`);
-  console.error(`Webhook: ${MAKE_WEBHOOK_URL.substring(0, 40)}...`);
-  console.error(`Tools: keap_list_contacts, keap_get_contact, keap_create_contact, keap_list_orders, keap_get_order`);
+  const app = express();
+  let transport: SSEServerTransport;
+
+  app.get("/sse", async (req, res) => {
+    console.log("New SSE connection established");
+    transport = new SSEServerTransport("/messages", res);
+    await server.connect(transport);
+  });
+
+  app.post("/messages", async (req, res) => {
+    if (transport) {
+      await transport.handlePostMessage(req, res);
+    } else {
+      res.status(400).send("No transport initialized");
+    }
+  });
+
+  const PORT = process.env.PORT || 8080;
+  app.listen(PORT, () => {
+    console.log(`${SERVER_NAME} v${SERVER_VERSION} running on port ${PORT}`);
+    console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
+    console.log(`Webhook: ${MAKE_WEBHOOK_URL.substring(0, 40)}...`);
+  });
 }
 
 // =============================================================================
 // Main Entry Point
 // =============================================================================
 
-runStdio().catch((error) => {
+runServer().catch((error) => {
   console.error("Server error:", error);
   process.exit(1);
 });
