@@ -4,12 +4,10 @@
  * An MCP server for Keap CRM using a proxy architecture.
  * All API calls are delegated to a Make.com webhook that handles authentication.
  * 
- * TOOLS IMPLEMENTED (V1 API):
- *   1. keap_list_contacts   - GET /v1/contacts
- *   2. keap_get_contact     - GET /v1/contacts/{id}
- *   3. keap_create_contact  - POST /v1/contacts
- *   4. keap_list_orders     - GET /v1/orders
- *   5. keap_get_order       - GET /v1/orders/{orderId}
+ * TOOLS IMPLEMENTED:
+ *   - V1 read-only list/get tools for common CRM resources
+ *   - V2 create/update/delete tools for contacts, companies, notes, tasks, tags,
+ *     opportunities, emails, email address status, and campaign sequence updates
  * 
  * Environment Variables:
  *   MAKE_WEBHOOK_URL - Required. The Make.com webhook URL for API execution.
@@ -78,14 +76,14 @@ function transformQueryParamsToKeyValueArray(
   params?: Record<string, string | number | boolean | undefined>
 ): MakeKeyValuePair[] {
   if (!params) return [];
-  
+
   const result: MakeKeyValuePair[] = [];
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== "") {
       result.push({ key, value });
     }
   }
-  
+
   return result;
 }
 
@@ -129,7 +127,7 @@ async function sendToMakeWebhook(payload: MakeWebhookPayload): Promise<MakeWebho
 
     const contentType = response.headers.get("content-type");
     let responseData: unknown;
-    
+
     if (contentType?.includes("application/json")) {
       responseData = await response.json();
     } else {
@@ -148,7 +146,7 @@ async function sendToMakeWebhook(payload: MakeWebhookPayload): Promise<MakeWebho
     // Handle response format from Make.com
     if (typeof responseData === "object" && responseData !== null) {
       const data = responseData as Record<string, unknown>;
-      
+
       if (data.error || data.success === false) {
         return {
           success: false,
@@ -197,20 +195,28 @@ async function sendToMakeWebhook(payload: MakeWebhookPayload): Promise<MakeWebho
 function formatToolResponse(response: MakeWebhookResponse): { success: boolean; content: string } {
   if (!response.success) {
     const errorMsg = response.error || "Unknown error";
-    const details = response.error_details 
+    const details = response.error_details
       ? `\n\nDetails: ${JSON.stringify(response.error_details, null, 2)}`
       : "";
     return { success: false, content: `Error: ${errorMsg}${details}` };
   }
 
   let content = JSON.stringify(response.data, null, 2);
-  
+
   if (content.length > CHARACTER_LIMIT) {
-    content = content.substring(0, CHARACTER_LIMIT) + 
+    content = content.substring(0, CHARACTER_LIMIT) +
       `\n\n... [Truncated. Total: ${content.length} chars. Use pagination for more.]`;
   }
-  
+
   return { success: true, content };
+}
+
+/**
+ * Normalize a string or string[] into a comma-delimited string
+ */
+function normalizeCommaList(value?: string | string[]): string | undefined {
+  if (!value) return undefined;
+  return Array.isArray(value) ? value.join(",") : value;
 }
 
 // =============================================================================
@@ -225,43 +231,43 @@ const ListContactsInputSchema = z.object({
   email: z.string()
     .optional()
     .describe("Optional email address to query on"),
-  
+
   given_name: z.string()
     .optional()
     .describe("Optional first name or forename to query on"),
-  
+
   family_name: z.string()
     .optional()
     .describe("Optional last name or surname to query on"),
-  
+
   order: z.enum(["id", "date_created", "last_updated", "name", "firstName", "email"])
     .optional()
     .describe("Attribute to order items by"),
-  
+
   order_direction: z.enum(["ASCENDING", "DESCENDING"])
     .optional()
     .describe("How to order the data i.e. ascending (A-Z) or descending (Z-A)"),
-  
+
   since: z.string()
     .optional()
     .describe("Date to start searching from on LastUpdated ex. 2017-01-01T22:17:59.039Z"),
-  
+
   until: z.string()
     .optional()
     .describe("Date to search to on LastUpdated ex. 2017-01-01T22:17:59.039Z"),
-  
+
   limit: z.number()
     .int()
     .positive()
     .optional()
     .describe("Sets a total of items to return"),
-  
+
   offset: z.number()
     .int()
     .min(0)
     .optional()
     .describe("Sets a beginning range of items to return"),
-  
+
   optional_properties: z.array(z.string())
     .optional()
     .describe("Extra fields to include: custom_fields, lead_source_id, job_title, tag_ids, etc.")
@@ -277,7 +283,7 @@ const GetContactInputSchema = z.object({
     .int()
     .positive()
     .describe("Contact ID (path parameter)"),
-  
+
   optional_properties: z.array(z.string())
     .optional()
     .describe("Extra fields to include in response")
@@ -302,35 +308,35 @@ const ListOrdersInputSchema = z.object({
     .positive()
     .optional()
     .describe("Returns orders for the provided contact id"),
-  
+
   product_id: z.number()
     .int()
     .positive()
     .optional()
     .describe("Returns orders containing the provided product id"),
-  
+
   paid: z.boolean()
     .optional()
     .describe("Sets paid status of items to return"),
-  
+
   order: z.enum(["order_date", "update_date"])
     .optional()
     .describe("Attribute to order items by. Default is creation_date. Dates ordered most recent first."),
-  
+
   since: z.string()
     .optional()
     .describe("Date to start searching from ex. 2017-01-01T22:17:59.039Z"),
-  
+
   until: z.string()
     .optional()
     .describe("Date to search to ex. 2017-01-01T22:17:59.039Z"),
-  
+
   limit: z.number()
     .int()
     .positive()
     .optional()
     .describe("Sets a total of items to return"),
-  
+
   offset: z.number()
     .int()
     .min(0)
@@ -445,7 +451,7 @@ Examples:
   GetContactInputSchema.shape,
   async (params: GetContactInput) => {
     const query_params: Record<string, string | undefined> = {};
-    
+
     if (params.optional_properties && params.optional_properties.length > 0) {
       query_params.optional_properties = params.optional_properties.join(",");
     }
@@ -570,13 +576,13 @@ const ListProductsInputSchema = z.object({
   active: z.boolean()
     .optional()
     .describe("Sets status of items to return (true for active, false for inactive)"),
-  
+
   limit: z.number()
     .int()
     .positive()
     .optional()
     .describe("Sets a total of items to return"),
-  
+
   offset: z.number()
     .int()
     .min(0)
@@ -612,19 +618,19 @@ const ListNotesInputSchema = z.object({
     .positive()
     .optional()
     .describe("Filter based on the contact id assigned to the note"),
-  
+
   user_id: z.number()
     .int()
     .positive()
     .optional()
     .describe("Filter based on the user id assigned to the note"),
-  
+
   limit: z.number()
     .int()
     .positive()
     .optional()
     .describe("Sets a total of items to return"),
-  
+
   offset: z.number()
     .int()
     .min(0)
@@ -650,39 +656,39 @@ const ListTasksInputSchema = z.object({
     .positive()
     .optional()
     .describe("Filter by contact ID"),
-  
+
   user_id: z.number()
     .int()
     .positive()
     .optional()
     .describe("Filter by user ID"),
-  
+
   completed: z.boolean()
     .optional()
     .describe("Sets completed status of items to return"),
-  
+
   has_due_date: z.boolean()
     .optional()
     .describe("Filter by whether task has a due date"),
-  
+
   order: z.string()
     .optional()
     .describe("Attribute to order items by"),
-  
+
   since: z.string()
     .optional()
     .describe("Date to start searching from ex. 2017-01-01T22:17:59.039Z"),
-  
+
   until: z.string()
     .optional()
     .describe("Date to search to ex. 2017-01-01T22:17:59.039Z"),
-  
+
   limit: z.number()
     .int()
     .positive()
     .optional()
     .describe("Sets a total of items to return"),
-  
+
   offset: z.number()
     .int()
     .min(0)
@@ -1900,6 +1906,1362 @@ No parameters required. Useful for finding stage_id values for opportunities.`,
   async (_params: ListOpportunityStagesInput) => {
     const response = await sendToMakeWebhook({
       path: "/v1/opportunity/stage_pipeline",
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// =============================================================================
+// Zod Schemas - V2 Write Operations (Selected Resources)
+// =============================================================================
+
+const CommaListSchema = z.union([z.string(), z.array(z.string())]).optional();
+
+const ContactFieldsSchema = z.object({
+  addresses: z.array(z.record(z.any())).optional().describe("Address objects"),
+  company: z.record(z.any()).optional().describe("Company reference"),
+  origin: z.string().optional(),
+  prefix: z.string().optional(),
+  suffix: z.string().optional(),
+  website: z.string().optional(),
+  anniversary_date: z.string().optional(),
+  birth_date: z.string().optional(),
+  contact_type: z.string().optional(),
+  custom_fields: z.array(z.record(z.any())).optional(),
+  email_addresses: z.array(z.record(z.any())).optional(),
+  family_name: z.string().optional(),
+  fax_numbers: z.array(z.record(z.any())).optional(),
+  given_name: z.string().optional(),
+  job_title: z.string().optional(),
+  leadsource_id: z.string().optional(),
+  middle_name: z.string().optional(),
+  owner_id: z.string().optional(),
+  phone_numbers: z.array(z.record(z.any())).optional(),
+  preferred_locale: z.string().optional(),
+  preferred_name: z.string().optional(),
+  referral_code: z.string().optional(),
+  social_accounts: z.array(z.record(z.any())).optional(),
+  source_type: z.string().optional(),
+  spouse_name: z.string().optional(),
+  time_zone: z.string().optional(),
+  utm_parameters: z.record(z.any()).optional()
+}).passthrough();
+
+const CreateContactV2InputSchema = z.object({
+  fields: CommaListSchema.describe("Optional fields to include in the response (comma-delimited or array)"),
+  body: ContactFieldsSchema.describe("Contact fields to create")
+}).strict();
+
+type CreateContactV2Input = z.infer<typeof CreateContactV2InputSchema>;
+
+const UpdateContactV2InputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  fields: CommaListSchema.describe("Optional fields to include in the response (comma-delimited or array)"),
+  body: ContactFieldsSchema.describe("Contact fields to update")
+}).strict();
+
+type UpdateContactV2Input = z.infer<typeof UpdateContactV2InputSchema>;
+
+const DeleteContactV2InputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)")
+}).strict();
+
+type DeleteContactV2Input = z.infer<typeof DeleteContactV2InputSchema>;
+
+const CompanyFieldsSchema = z.object({
+  address: z.record(z.any()).optional(),
+  notes: z.string().optional(),
+  website: z.string().optional(),
+  company_name: z.string().optional(),
+  custom_fields: z.array(z.record(z.any())).optional(),
+  email_address: z.record(z.any()).optional(),
+  fax_number: z.record(z.any()).optional(),
+  phone_number: z.record(z.any()).optional()
+}).passthrough();
+
+const CreateCompanyV2InputSchema = z.object({
+  body: CompanyFieldsSchema.describe("Company fields to create")
+}).strict();
+
+type CreateCompanyV2Input = z.infer<typeof CreateCompanyV2InputSchema>;
+
+const UpdateCompanyV2InputSchema = z.object({
+  company_id: z.string().describe("Company ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: CompanyFieldsSchema.describe("Company fields to update")
+}).strict();
+
+type UpdateCompanyV2Input = z.infer<typeof UpdateCompanyV2InputSchema>;
+
+const DeleteCompanyV2InputSchema = z.object({
+  company_id: z.string().describe("Company ID (path parameter)")
+}).strict();
+
+type DeleteCompanyV2Input = z.infer<typeof DeleteCompanyV2InputSchema>;
+
+const CreateNoteBodySchema = z.object({
+  title: z.string().optional(),
+  text: z.string().optional(),
+  type: z.string().optional(),
+  user_id: z.string().describe("User ID (required)"),
+  is_pinned: z.boolean().optional()
+}).passthrough();
+
+const UpdateNoteBodySchema = z.object({
+  title: z.string().optional(),
+  text: z.string().optional(),
+  type: z.string().optional(),
+  user_id: z.string().describe("User ID (required)"),
+  is_pinned: z.boolean().optional(),
+  contact_id: z.string().optional().describe("Optional new contact ID for the note")
+}).passthrough();
+
+const CreateNoteV2InputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)"),
+  body: CreateNoteBodySchema.describe("Note fields to create")
+}).strict();
+
+type CreateNoteV2Input = z.infer<typeof CreateNoteV2InputSchema>;
+
+const UpdateNoteV2InputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)"),
+  note_id: z.string().describe("Note ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: UpdateNoteBodySchema.describe("Note fields to update")
+}).strict();
+
+type UpdateNoteV2Input = z.infer<typeof UpdateNoteV2InputSchema>;
+
+const DeleteNoteV2InputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)"),
+  note_id: z.string().describe("Note ID (path parameter)")
+}).strict();
+
+type DeleteNoteV2Input = z.infer<typeof DeleteNoteV2InputSchema>;
+
+const CreateTaskBodySchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  type: z.string().optional(),
+  priority: z.string().optional(),
+  completed: z.boolean().optional(),
+  completion_time: z.string().optional(),
+  due_time: z.string().optional(),
+  remind_time_mins: z.number().int().optional(),
+  assigned_to_user_id: z.string().describe("Assigned user ID (required)"),
+  contact_id: z.string().optional()
+}).passthrough();
+
+const UpdateTaskBodySchema = z.object({
+  title: z.string().optional(),
+  description: z.string().optional(),
+  type: z.string().optional(),
+  priority: z.string().optional(),
+  completed: z.boolean().optional(),
+  completion_time: z.string().optional(),
+  due_time: z.string().optional(),
+  remind_time_mins: z.number().int().optional(),
+  assigned_to_user_id: z.string().optional(),
+  contact_id: z.string().optional()
+}).passthrough();
+
+const CreateTaskV2InputSchema = z.object({
+  body: CreateTaskBodySchema.describe("Task fields to create")
+}).strict();
+
+type CreateTaskV2Input = z.infer<typeof CreateTaskV2InputSchema>;
+
+const UpdateTaskV2InputSchema = z.object({
+  task_id: z.string().describe("Task ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: UpdateTaskBodySchema.describe("Task fields to update")
+}).strict();
+
+type UpdateTaskV2Input = z.infer<typeof UpdateTaskV2InputSchema>;
+
+const DeleteTaskV2InputSchema = z.object({
+  task_id: z.string().describe("Task ID (path parameter)")
+}).strict();
+
+type DeleteTaskV2Input = z.infer<typeof DeleteTaskV2InputSchema>;
+
+const TagBodySchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  category: z.record(z.any()).optional()
+}).passthrough();
+
+const CreateTagV2InputSchema = z.object({
+  body: TagBodySchema.describe("Tag fields to create")
+}).strict();
+
+type CreateTagV2Input = z.infer<typeof CreateTagV2InputSchema>;
+
+const UpdateTagV2InputSchema = z.object({
+  tag_id: z.string().describe("Tag ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: TagBodySchema.describe("Tag fields to update")
+}).strict();
+
+type UpdateTagV2Input = z.infer<typeof UpdateTagV2InputSchema>;
+
+const DeleteTagV2InputSchema = z.object({
+  tag_id: z.string().describe("Tag ID (path parameter)")
+}).strict();
+
+type DeleteTagV2Input = z.infer<typeof DeleteTagV2InputSchema>;
+
+const OpportunityBaseBodySchema = z.object({
+  next_action_time: z.string().optional(),
+  next_action_notes: z.string().optional(),
+  opportunity_notes: z.string().optional(),
+  estimated_close_time: z.string().optional(),
+  include_in_forecast: z.boolean().optional(),
+  projected_revenue_low: z.number().optional(),
+  projected_revenue_high: z.number().optional(),
+  contact_id: z.string().optional(),
+  stage_id: z.string().optional(),
+  user_id: z.string().optional(),
+  custom_fields: z.array(z.record(z.any())).optional(),
+  affiliate_id: z.string().optional()
+}).passthrough();
+
+const CreateOpportunityBodySchema = OpportunityBaseBodySchema.extend({
+  opportunity_title: z.string().describe("Opportunity title (required)")
+});
+
+const UpdateOpportunityBodySchema = OpportunityBaseBodySchema.extend({
+  opportunity_title: z.string().optional()
+});
+
+const CreateOpportunityV2InputSchema = z.object({
+  body: CreateOpportunityBodySchema.describe("Opportunity fields to create")
+}).strict();
+
+type CreateOpportunityV2Input = z.infer<typeof CreateOpportunityV2InputSchema>;
+
+const UpdateOpportunityV2InputSchema = z.object({
+  opportunity_id: z.string().describe("Opportunity ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: UpdateOpportunityBodySchema.describe("Opportunity fields to update")
+}).strict();
+
+type UpdateOpportunityV2Input = z.infer<typeof UpdateOpportunityV2InputSchema>;
+
+const DeleteOpportunityV2InputSchema = z.object({
+  opportunity_id: z.string().describe("Opportunity ID (path parameter)")
+}).strict();
+
+type DeleteOpportunityV2Input = z.infer<typeof DeleteOpportunityV2InputSchema>;
+
+const EmailRecordBodySchema = z.object({
+  subject: z.string().optional(),
+  headers: z.string().optional(),
+  contact_id: z.string().optional(),
+  sent_to_address: z.string().describe("Recipient email address (required)"),
+  sent_to_cc_address_list: z.array(z.string()).optional(),
+  sent_to_bcc_address_list: z.array(z.string()).optional(),
+  sent_from_address: z.string().optional(),
+  sent_from_reply_address: z.string().optional(),
+  sent_time: z.string().optional(),
+  received_time: z.string().optional(),
+  opened_time: z.string().optional(),
+  clicked_time: z.string().optional(),
+  plain_content: z.string().optional().describe("Base64 encoded text"),
+  html_content: z.string().optional().describe("Base64 encoded HTML"),
+  original_provider: z.enum(["UNKNOWN", "INFUSIONSOFT", "MICROSOFT", "GOOGLE"]).optional(),
+  original_provider_id: z.string().optional(),
+  provider_source_id: z.string().optional()
+}).passthrough();
+
+const CreateEmailV2InputSchema = z.object({
+  body: EmailRecordBodySchema.describe("Email record fields to create")
+}).strict();
+
+type CreateEmailV2Input = z.infer<typeof CreateEmailV2InputSchema>;
+
+const EmailSendBodySchema = z.object({
+  contacts: z.array(z.string()).describe("Contact IDs to receive the email (required)"),
+  subject: z.string().describe("Email subject (required)"),
+  attachments: z.array(z.record(z.any())).optional(),
+  user_id: z.string().describe("User ID sending the email (required)"),
+  html_content: z.string().optional().describe("Base64 encoded HTML content"),
+  plain_content: z.string().optional().describe("Base64 encoded text content"),
+  address_field: z.string().optional()
+}).passthrough();
+
+const SendEmailV2InputSchema = z.object({
+  body: EmailSendBodySchema.describe("Email send request")
+}).strict();
+
+type SendEmailV2Input = z.infer<typeof SendEmailV2InputSchema>;
+
+const DeleteEmailV2InputSchema = z.object({
+  email_id: z.string().describe("Email record ID (path parameter)")
+}).strict();
+
+type DeleteEmailV2Input = z.infer<typeof DeleteEmailV2InputSchema>;
+
+const EmailAddressStatusInputSchema = z.object({
+  email: z.string().describe("Email address")
+}).strict();
+
+type EmailAddressStatusInput = z.infer<typeof EmailAddressStatusInputSchema>;
+
+const UpdateEmailAddressBodySchema = z.object({
+  opted_in: z.boolean().describe("Opt-in status (required)"),
+  reason: z.string().describe("Reason for the status change (required)")
+}).passthrough();
+
+const UpdateEmailAddressStatusInputSchema = z.object({
+  email: z.string().describe("Email address"),
+  body: UpdateEmailAddressBodySchema.describe("Email address status update")
+}).strict();
+
+type UpdateEmailAddressStatusInput = z.infer<typeof UpdateEmailAddressStatusInputSchema>;
+
+const CampaignSequenceContactsBodySchema = z.object({
+  contact_ids: z.array(z.string()).describe("Contact IDs to add/remove")
+}).passthrough();
+
+const AddContactsToCampaignSequenceInputSchema = z.object({
+  campaign_id: z.string().describe("Campaign ID (path parameter)"),
+  sequence_id: z.string().describe("Sequence ID (path parameter)"),
+  body: CampaignSequenceContactsBodySchema.describe("Contacts to add")
+}).strict();
+
+type AddContactsToCampaignSequenceInput = z.infer<typeof AddContactsToCampaignSequenceInputSchema>;
+
+const RemoveContactsFromCampaignSequenceInputSchema = z.object({
+  campaign_id: z.string().describe("Campaign ID (path parameter)"),
+  sequence_id: z.string().describe("Sequence ID (path parameter)"),
+  body: CampaignSequenceContactsBodySchema.describe("Contacts to remove")
+}).strict();
+
+type RemoveContactsFromCampaignSequenceInput = z.infer<typeof RemoveContactsFromCampaignSequenceInputSchema>;
+
+const UpdateUserBodySchema = z.object({
+  address: z.record(z.any()).optional(),
+  title: z.string().optional(),
+  website: z.string().optional(),
+  company_name: z.string().optional(),
+  email_address: z.record(z.any()).optional(),
+  family_name: z.string().optional(),
+  fax_numbers: z.array(z.record(z.any())).optional(),
+  given_name: z.string().optional(),
+  phone_numbers: z.array(z.record(z.any())).optional(),
+  time_zone: z.string().optional()
+}).passthrough();
+
+const UpdateUserV2InputSchema = z.object({
+  user_id: z.string().describe("User ID (path parameter)"),
+  update_mask: CommaListSchema.describe("Optional list of fields to update (comma-delimited or array)"),
+  body: UpdateUserBodySchema.describe("User fields to update")
+}).strict();
+
+type UpdateUserV2Input = z.infer<typeof UpdateUserV2InputSchema>;
+
+const ListUserGroupsV2InputSchema = z.object({}).strict();
+type ListUserGroupsV2Input = z.infer<typeof ListUserGroupsV2InputSchema>;
+
+const GetUserGroupV2InputSchema = z.object({
+  user_group_id: z.string().describe("User group ID (path parameter)")
+}).strict();
+
+type GetUserGroupV2Input = z.infer<typeof GetUserGroupV2InputSchema>;
+
+const ListWebformsV2InputSchema = z.object({
+  filter: z.string().optional().describe("Filter string (e.g., name==MyForm)"),
+  page_token: z.string().optional().describe("Page token"),
+  order_by: z.string().optional().describe("Order by field and direction"),
+  page_size: z.number().int().min(0).max(1000).optional().describe("Results per page")
+}).strict();
+
+type ListWebformsV2Input = z.infer<typeof ListWebformsV2InputSchema>;
+
+const GetWebformDataV2InputSchema = z.object({
+  webform_id: z.string().describe("Webform ID (path parameter)")
+}).strict();
+
+type GetWebformDataV2Input = z.infer<typeof GetWebformDataV2InputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 31: keap_create_contact
+// API: POST /v2/contacts
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_contact",
+  `Create a new contact in Keap (V2).
+
+API Endpoint: POST /v2/contacts
+
+Args:
+  - fields (string|array, optional): Fields to include in response
+  - body (object, required): Contact fields (email_addresses or phone_numbers required)
+
+Returns:
+  Created contact object.`,
+  CreateContactV2InputSchema.shape,
+  async (params: CreateContactV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      fields: normalizeCommaList(params.fields)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v2/contacts",
+      method: "POST",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 32: keap_update_contact
+// API: PATCH /v2/contacts/{contact_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_contact",
+  `Update an existing contact in Keap (V2).
+
+API Endpoint: PATCH /v2/contacts/{contact_id}
+
+Args:
+  - contact_id (string, required): Contact ID
+  - update_mask (string|array, optional): Fields to update
+  - fields (string|array, optional): Fields to include in response
+  - body (object, required): Contact fields to update
+
+Returns:
+  Updated contact object.`,
+  UpdateContactV2InputSchema.shape,
+  async (params: UpdateContactV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask),
+      fields: normalizeCommaList(params.fields)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 33: keap_delete_contact
+// API: DELETE /v2/contacts/{contact_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_contact",
+  `Delete a contact in Keap (V2).
+
+API Endpoint: DELETE /v2/contacts/{contact_id}
+
+Args:
+  - contact_id (string, required): Contact ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteContactV2InputSchema.shape,
+  async (params: DeleteContactV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 34: keap_create_company
+// API: POST /v2/companies
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_company",
+  `Create a new company in Keap (V2).
+
+API Endpoint: POST /v2/companies
+
+Args:
+  - body (object, required): Company fields
+
+Returns:
+  Created company object.`,
+  CreateCompanyV2InputSchema.shape,
+  async (params: CreateCompanyV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/companies",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 35: keap_update_company
+// API: PATCH /v2/companies/{company_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_company",
+  `Update an existing company in Keap (V2).
+
+API Endpoint: PATCH /v2/companies/{company_id}
+
+Args:
+  - company_id (string, required): Company ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): Company fields to update
+
+Returns:
+  Updated company object.`,
+  UpdateCompanyV2InputSchema.shape,
+  async (params: UpdateCompanyV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/companies/${params.company_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 36: keap_delete_company
+// API: DELETE /v2/companies/{company_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_company",
+  `Delete a company in Keap (V2).
+
+API Endpoint: DELETE /v2/companies/{company_id}
+
+Args:
+  - company_id (string, required): Company ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteCompanyV2InputSchema.shape,
+  async (params: DeleteCompanyV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/companies/${params.company_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 37: keap_create_note
+// API: POST /v2/contacts/{contact_id}/notes
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_note",
+  `Create a note for a contact in Keap (V2).
+
+API Endpoint: POST /v2/contacts/{contact_id}/notes
+
+Args:
+  - contact_id (string, required): Contact ID
+  - body (object, required): Note fields (user_id required)
+
+Returns:
+  Created note object.`,
+  CreateNoteV2InputSchema.shape,
+  async (params: CreateNoteV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}/notes`,
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 38: keap_update_note
+// API: PATCH /v2/contacts/{contact_id}/notes/{note_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_note",
+  `Update a note for a contact in Keap (V2).
+
+API Endpoint: PATCH /v2/contacts/{contact_id}/notes/{note_id}
+
+Args:
+  - contact_id (string, required): Contact ID
+  - note_id (string, required): Note ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): Note fields to update (user_id required)
+
+Returns:
+  Updated note object.`,
+  UpdateNoteV2InputSchema.shape,
+  async (params: UpdateNoteV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}/notes/${params.note_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 39: keap_delete_note
+// API: DELETE /v2/contacts/{contact_id}/notes/{note_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_note",
+  `Delete a note for a contact in Keap (V2).
+
+API Endpoint: DELETE /v2/contacts/{contact_id}/notes/{note_id}
+
+Args:
+  - contact_id (string, required): Contact ID
+  - note_id (string, required): Note ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteNoteV2InputSchema.shape,
+  async (params: DeleteNoteV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}/notes/${params.note_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 40: keap_create_task
+// API: POST /v2/tasks
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_task",
+  `Create a task in Keap (V2).
+
+API Endpoint: POST /v2/tasks
+
+Args:
+  - body (object, required): Task fields (assigned_to_user_id required)
+
+Returns:
+  Created task object.`,
+  CreateTaskV2InputSchema.shape,
+  async (params: CreateTaskV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/tasks",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 41: keap_update_task
+// API: PATCH /v2/tasks/{task_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_task",
+  `Update a task in Keap (V2).
+
+API Endpoint: PATCH /v2/tasks/{task_id}
+
+Args:
+  - task_id (string, required): Task ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): Task fields to update
+
+Returns:
+  Updated task object.`,
+  UpdateTaskV2InputSchema.shape,
+  async (params: UpdateTaskV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/tasks/${params.task_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 42: keap_delete_task
+// API: DELETE /v2/tasks/{task_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_task",
+  `Delete a task in Keap (V2).
+
+API Endpoint: DELETE /v2/tasks/{task_id}
+
+Args:
+  - task_id (string, required): Task ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteTaskV2InputSchema.shape,
+  async (params: DeleteTaskV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/tasks/${params.task_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 43: keap_create_tag
+// API: POST /v2/tags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_tag",
+  `Create a tag in Keap (V2).
+
+API Endpoint: POST /v2/tags
+
+Args:
+  - body (object, required): Tag fields
+
+Returns:
+  Created tag object.`,
+  CreateTagV2InputSchema.shape,
+  async (params: CreateTagV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/tags",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 44: keap_update_tag
+// API: PATCH /v2/tags/{tag_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_tag",
+  `Update a tag in Keap (V2).
+
+API Endpoint: PATCH /v2/tags/{tag_id}
+
+Args:
+  - tag_id (string, required): Tag ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): Tag fields to update
+
+Returns:
+  Updated tag object.`,
+  UpdateTagV2InputSchema.shape,
+  async (params: UpdateTagV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/tags/${params.tag_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 45: keap_delete_tag
+// API: DELETE /v2/tags/{tag_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_tag",
+  `Delete a tag in Keap (V2).
+
+API Endpoint: DELETE /v2/tags/{tag_id}
+
+Args:
+  - tag_id (string, required): Tag ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteTagV2InputSchema.shape,
+  async (params: DeleteTagV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/tags/${params.tag_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 46: keap_create_opportunity
+// API: POST /v2/opportunities
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_opportunity",
+  `Create an opportunity in Keap (V2).
+
+API Endpoint: POST /v2/opportunities
+
+Args:
+  - body (object, required): Opportunity fields (opportunity_title required)
+
+Returns:
+  Created opportunity object.`,
+  CreateOpportunityV2InputSchema.shape,
+  async (params: CreateOpportunityV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/opportunities",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 47: keap_update_opportunity
+// API: PATCH /v2/opportunities/{opportunity_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_opportunity",
+  `Update an opportunity in Keap (V2).
+
+API Endpoint: PATCH /v2/opportunities/{opportunity_id}
+
+Args:
+  - opportunity_id (string, required): Opportunity ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): Opportunity fields to update
+
+Returns:
+  Updated opportunity object.`,
+  UpdateOpportunityV2InputSchema.shape,
+  async (params: UpdateOpportunityV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/opportunities/${params.opportunity_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 48: keap_delete_opportunity
+// API: DELETE /v2/opportunities/{opportunity_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_opportunity",
+  `Delete an opportunity in Keap (V2).
+
+API Endpoint: DELETE /v2/opportunities/{opportunity_id}
+
+Args:
+  - opportunity_id (string, required): Opportunity ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteOpportunityV2InputSchema.shape,
+  async (params: DeleteOpportunityV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/opportunities/${params.opportunity_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 49: keap_create_email
+// API: POST /v2/emails
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_email",
+  `Create an email record in Keap (V2).
+
+API Endpoint: POST /v2/emails
+
+Args:
+  - body (object, required): Email record fields (sent_to_address required)
+
+Returns:
+  Created email record.`,
+  CreateEmailV2InputSchema.shape,
+  async (params: CreateEmailV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/emails",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 50: keap_send_email
+// API: POST /v2/emails:send
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_send_email",
+  `Send an email to contacts in Keap (V2).
+
+API Endpoint: POST /v2/emails:send
+
+Args:
+  - body (object, required): Email send request (contacts, subject, user_id required)
+
+Returns:
+  202 Accepted on success.`,
+  SendEmailV2InputSchema.shape,
+  async (params: SendEmailV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/emails:send",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 51: keap_delete_email
+// API: DELETE /v2/emails/{id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_delete_email",
+  `Delete an email record in Keap (V2).
+
+API Endpoint: DELETE /v2/emails/{id}
+
+Args:
+  - email_id (string, required): Email record ID
+
+Returns:
+  204 No Content on success.`,
+  DeleteEmailV2InputSchema.shape,
+  async (params: DeleteEmailV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/emails/${params.email_id}`,
+      method: "DELETE"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 52: keap_get_email_address_status
+// API: GET /v2/emailAddresses/{email}/status
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_email_address_status",
+  `Retrieve email address status in Keap (V2).
+
+API Endpoint: GET /v2/emailAddresses/{email}/status
+
+Args:
+  - email (string, required): Email address (URL-encode '@' as '%40' if needed)
+
+Returns:
+  Email address status object.`,
+  EmailAddressStatusInputSchema.shape,
+  async (params: EmailAddressStatusInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/emailAddresses/${params.email}/status`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 53: keap_update_email_address_status
+// API: PATCH /v2/emailAddresses/{email}/status
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_email_address_status",
+  `Update email address status in Keap (V2).
+
+API Endpoint: PATCH /v2/emailAddresses/{email}/status
+
+Args:
+  - email (string, required): Email address (URL-encode '@' as '%40' if needed)
+  - body (object, required): { opted_in, reason }
+
+Returns:
+  Updated email address status object.`,
+  UpdateEmailAddressStatusInputSchema.shape,
+  async (params: UpdateEmailAddressStatusInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/emailAddresses/${params.email}/status`,
+      method: "PATCH",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 54: keap_add_contacts_to_campaign_sequence
+// API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:addContacts
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_add_contacts_to_campaign_sequence",
+  `Add contacts to a campaign sequence in Keap (V2).
+
+API Endpoint: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:addContacts
+
+Args:
+  - campaign_id (string, required)
+  - sequence_id (string, required)
+  - body (object, required): { contact_ids: [...] }
+
+Returns:
+  Map of contact IDs to results.`,
+  AddContactsToCampaignSequenceInputSchema.shape,
+  async (params: AddContactsToCampaignSequenceInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/campaigns/${params.campaign_id}/sequences/${params.sequence_id}:addContacts`,
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 55: keap_remove_contacts_from_campaign_sequence
+// API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:removeContacts
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_remove_contacts_from_campaign_sequence",
+  `Remove contacts from a campaign sequence in Keap (V2).
+
+API Endpoint: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:removeContacts
+
+Args:
+  - campaign_id (string, required)
+  - sequence_id (string, required)
+  - body (object, required): { contact_ids: [...] }
+
+Returns:
+  Map of contact IDs to results.`,
+  RemoveContactsFromCampaignSequenceInputSchema.shape,
+  async (params: RemoveContactsFromCampaignSequenceInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/campaigns/${params.campaign_id}/sequences/${params.sequence_id}:removeContacts`,
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 56: keap_update_user
+// API: PATCH /v2/users/{user_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_update_user",
+  `Update a user in Keap (V2).
+
+API Endpoint: PATCH /v2/users/{user_id}
+
+Args:
+  - user_id (string, required): User ID
+  - update_mask (string|array, optional): Fields to update
+  - body (object, required): User fields to update
+
+Returns:
+  Updated user object.`,
+  UpdateUserV2InputSchema.shape,
+  async (params: UpdateUserV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      update_mask: normalizeCommaList(params.update_mask)
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/users/${params.user_id}`,
+      method: "PATCH",
+      query_params,
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 57: keap_list_user_groups
+// API: GET /v2/userGroups
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_user_groups",
+  `List user groups in Keap (V2).
+
+API Endpoint: GET /v2/userGroups
+
+No parameters required.`,
+  ListUserGroupsV2InputSchema.shape,
+  async (_params: ListUserGroupsV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/userGroups",
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 58: keap_get_user_group
+// API: GET /v2/userGroups/{user_group_id}
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_user_group",
+  `Retrieve a user group in Keap (V2).
+
+API Endpoint: GET /v2/userGroups/{user_group_id}
+
+Args:
+  - user_group_id (string, required): User group ID`,
+  GetUserGroupV2InputSchema.shape,
+  async (params: GetUserGroupV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/userGroups/${params.user_group_id}`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 59: keap_list_webforms
+// API: GET /v2/webforms
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_webforms",
+  `List webforms in Keap (V2).
+
+API Endpoint: GET /v2/webforms
+
+Args:
+  - filter (string, optional): Filter string
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page`,
+  ListWebformsV2InputSchema.shape,
+  async (params: ListWebformsV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v2/webforms",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 60: keap_get_webform_data
+// API: GET /v2/webforms/{webform_id}:data
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_get_webform_data",
+  `Retrieve submitted data for a webform in Keap (V2).
+
+API Endpoint: GET /v2/webforms/{webform_id}:data
+
+Args:
+  - webform_id (string, required): Webform ID`,
+  GetWebformDataV2InputSchema.shape,
+  async (params: GetWebformDataV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/webforms/${params.webform_id}:data`,
       method: "GET"
     });
 
