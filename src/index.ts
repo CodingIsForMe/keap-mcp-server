@@ -228,6 +228,12 @@ function normalizeCommaList(value?: string | string[]): string | undefined {
  * Verified parameters from Keap V1 OpenAPI documentation
  */
 const ListContactsInputSchema = z.object({
+  tag_id: z.number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Filter contacts by tag ID"),
+
   email: z.string()
     .optional()
     .describe("Optional email address to query on"),
@@ -379,6 +385,7 @@ API Endpoint: GET /v1/contacts
 
 Args:
   - email (string, optional): Email address to query on
+  - tag_id (integer, optional): Filter by tag ID
   - given_name (string, optional): First name to query on
   - family_name (string, optional): Last name to query on
   - order (enum, optional): Sort by - 'id', 'date_created', 'last_updated', 'name', 'firstName', 'email'
@@ -399,6 +406,7 @@ Examples:
   ListContactsInputSchema.shape,
   async (params: ListContactsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
+      tag_id: params.tag_id,
       email: params.email,
       given_name: params.given_name,
       family_name: params.family_name,
