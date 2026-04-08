@@ -7,7 +7,8 @@
  * TOOLS IMPLEMENTED:
  *   - V1 read-only list/get tools for common CRM resources
  *   - V2 create/update/delete tools for contacts, companies, notes, tasks, tags,
- *     opportunities, emails, email address status, and campaign sequence updates
+ *     tag apply/remove, opportunities, emails, email address status, and campaign
+ *     sequence updates
  * 
  * Environment Variables:
  *   MAKE_WEBHOOK_URL - Required. The Make.com webhook URL for API execution.
@@ -2126,6 +2127,90 @@ const DeleteTagV2InputSchema = z.object({
 
 type DeleteTagV2Input = z.infer<typeof DeleteTagV2InputSchema>;
 
+const TagCategoryBodySchema = z.object({
+  name: z.string().describe("Tag category name"),
+  description: z.string().optional()
+}).strict();
+
+const ListTagCategoriesInputSchema = z.object({
+  filter: z.string().optional(),
+  page_token: z.string().optional(),
+  order_by: z.string().optional(),
+  page_size: z.number().int().optional()
+}).strict();
+
+type ListTagCategoriesInput = z.infer<typeof ListTagCategoriesInputSchema>;
+
+const CreateTagCategoryInputSchema = z.object({
+  body: TagCategoryBodySchema.describe("Tag category fields to create")
+}).strict();
+
+type CreateTagCategoryInput = z.infer<typeof CreateTagCategoryInputSchema>;
+
+const TagContactIdsBodySchema = z.object({
+  contact_ids: z.array(z.string()).min(1).describe("Contact IDs to apply/remove the tag")
+}).strict();
+
+const ApplyTagV2InputSchema = z.object({
+  tag_id: z.string().describe("Tag ID (path parameter)"),
+  body: TagContactIdsBodySchema.describe("Contact IDs to apply the tag to")
+}).strict();
+
+type ApplyTagV2Input = z.infer<typeof ApplyTagV2InputSchema>;
+
+const RemoveTagV2InputSchema = z.object({
+  tag_id: z.string().describe("Tag ID (path parameter)"),
+  body: TagContactIdsBodySchema.describe("Contact IDs to remove the tag from")
+}).strict();
+
+type RemoveTagV2Input = z.infer<typeof RemoveTagV2InputSchema>;
+
+const ListContactTagsInputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)"),
+  limit: z.number().int().optional(),
+  offset: z.number().int().optional()
+}).strict();
+
+type ListContactTagsInput = z.infer<typeof ListContactTagsInputSchema>;
+
+const ListContactLinksInputSchema = z.object({
+  contact_id: z.string().describe("Contact ID (path parameter)")
+}).strict();
+
+type ListContactLinksInput = z.infer<typeof ListContactLinksInputSchema>;
+
+const ListContactLinkTypesInputSchema = z.object({
+  filter: z.string().optional(),
+  page_token: z.string().optional(),
+  order_by: z.string().optional(),
+  page_size: z.number().int().optional()
+}).strict();
+
+type ListContactLinkTypesInput = z.infer<typeof ListContactLinkTypesInputSchema>;
+
+const LinkContactsBodySchema = z.object({
+  contact1_id: z.string().describe("First contact ID"),
+  contact2_id: z.string().describe("Second contact ID"),
+  link_type_id: z.string().describe("Link type ID")
+}).strict();
+
+const LinkContactsInputSchema = z.object({
+  body: LinkContactsBodySchema.describe("Link contacts request")
+}).strict();
+
+type LinkContactsInput = z.infer<typeof LinkContactsInputSchema>;
+
+const RunReportInputSchema = z.object({
+  report_id: z.string().describe("Report (Saved Search) ID"),
+  page_token: z.string().optional(),
+  order_by: z.string().optional(),
+  page_size: z.number().int().optional(),
+  fields: z.string().optional(),
+  fields_as_set: CommaListSchema.optional().describe("Fields as array or comma-delimited string")
+}).strict();
+
+type RunReportInput = z.infer<typeof RunReportInputSchema>;
+
 const OpportunityBaseBodySchema = z.object({
   next_action_time: z.string().optional(),
   next_action_notes: z.string().optional(),
@@ -2807,7 +2892,73 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 46: keap_create_opportunity
+// TOOL 46: keap_apply_tag
+// API: POST /v2/tags/{tag_id}/contacts:applyTags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_apply_tag",
+  `Apply a tag to a list of contacts (V2).
+
+API Endpoint: POST /v2/tags/{tag_id}/contacts:applyTags
+
+Args:
+  - tag_id (string, required): Tag ID
+  - body (object, required):
+    - contact_ids (array[string], required): Contact IDs to apply the tag to
+
+Returns:
+  Apply tags response.`,
+  ApplyTagV2InputSchema.shape,
+  async (params: ApplyTagV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/tags/${params.tag_id}/contacts:applyTags`,
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 47: keap_remove_tag
+// API: POST /v2/tags/{tag_id}/contacts:removeTags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_remove_tag",
+  `Remove a tag from a list of contacts (V2).
+
+API Endpoint: POST /v2/tags/{tag_id}/contacts:removeTags
+
+Args:
+  - tag_id (string, required): Tag ID
+  - body (object, required):
+    - contact_ids (array[string], required): Contact IDs to remove the tag from
+
+Returns:
+  204 No Content on success.`,
+  RemoveTagV2InputSchema.shape,
+  async (params: RemoveTagV2Input) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/tags/${params.tag_id}/contacts:removeTags`,
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 48: keap_create_opportunity
 // API: POST /v2/opportunities
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2838,7 +2989,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 47: keap_update_opportunity
+// TOOL 49: keap_update_opportunity
 // API: PATCH /v2/opportunities/{opportunity_id}
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2876,7 +3027,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 48: keap_delete_opportunity
+// TOOL 50: keap_delete_opportunity
 // API: DELETE /v2/opportunities/{opportunity_id}
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2906,7 +3057,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 49: keap_create_email
+// TOOL 51: keap_create_email
 // API: POST /v2/emails
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2937,7 +3088,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 50: keap_send_email
+// TOOL 52: keap_send_email
 // API: POST /v2/emails:send
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2968,7 +3119,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 51: keap_delete_email
+// TOOL 53: keap_delete_email
 // API: DELETE /v2/emails/{id}
 // ---------------------------------------------------------------------------
 server.tool(
@@ -2998,7 +3149,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 52: keap_get_email_address_status
+// TOOL 54: keap_get_email_address_status
 // API: GET /v2/emailAddresses/{email}/status
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3028,7 +3179,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 53: keap_update_email_address_status
+// TOOL 55: keap_update_email_address_status
 // API: PATCH /v2/emailAddresses/{email}/status
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3060,7 +3211,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 54: keap_add_contacts_to_campaign_sequence
+// TOOL 56: keap_add_contacts_to_campaign_sequence
 // API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:addContacts
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3093,7 +3244,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 55: keap_remove_contacts_from_campaign_sequence
+// TOOL 57: keap_remove_contacts_from_campaign_sequence
 // API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:removeContacts
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3126,7 +3277,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 56: keap_update_user
+// TOOL 58: keap_update_user
 // API: PATCH /v2/users/{user_id}
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3164,7 +3315,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 57: keap_list_user_groups
+// TOOL 59: keap_list_user_groups
 // API: GET /v2/userGroups
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3190,7 +3341,7 @@ No parameters required.`,
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 58: keap_get_user_group
+// TOOL 60: keap_get_user_group
 // API: GET /v2/userGroups/{user_group_id}
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3217,7 +3368,7 @@ Args:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 59: keap_list_webforms
+// TOOL 61: keap_list_webforms
 // API: GET /v2/webforms
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3255,7 +3406,7 @@ Args:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 60: keap_get_webform_data
+// TOOL 62: keap_get_webform_data
 // API: GET /v2/webforms/{webform_id}:data
 // ---------------------------------------------------------------------------
 server.tool(
@@ -3271,6 +3422,293 @@ Args:
     const response = await sendToMakeWebhook({
       path: `/v2/webforms/${params.webform_id}:data`,
       method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 63: keap_list_tag_categories
+// API: GET /v2/tags/categories
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_tag_categories",
+  `List tag categories in Keap (V2).
+
+API Endpoint: GET /v2/tags/categories
+
+Args:
+  - filter (string, optional): Filter string
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page`,
+  ListTagCategoriesInputSchema.shape,
+  async (params: ListTagCategoriesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v2/tags/categories",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 64: keap_create_tag_category
+// API: POST /v2/tags/categories
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_create_tag_category",
+  `Create a tag category in Keap (V2).
+
+API Endpoint: POST /v2/tags/categories
+
+Args:
+  - body (object, required):
+    - name (string, required): Tag category name
+    - description (string, optional): Tag category description
+
+Returns:
+  Created tag category object.`,
+  CreateTagCategoryInputSchema.shape,
+  async (params: CreateTagCategoryInput) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/tags/categories",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 65: keap_list_contact_tags
+// API: GET /v1/contacts/{contact_id}/tags
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_contact_tags",
+  `List tags applied to a contact (V1).
+
+API Endpoint: GET /v1/contacts/{contact_id}/tags
+
+Args:
+  - contact_id (string, required): Contact ID
+  - limit (integer, optional): Results per page
+  - offset (integer, optional): Offset for pagination`,
+  ListContactTagsInputSchema.shape,
+  async (params: ListContactTagsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      limit: params.limit,
+      offset: params.offset
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v1/contacts/${params.contact_id}/tags`,
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 66: keap_list_contact_links
+// API: GET /v2/contacts/{contact_id}/links
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_contact_links",
+  `List contact links for a contact (V2).
+
+API Endpoint: GET /v2/contacts/{contact_id}/links
+
+Args:
+  - contact_id (string, required): Contact ID`,
+  ListContactLinksInputSchema.shape,
+  async (params: ListContactLinksInput) => {
+    const response = await sendToMakeWebhook({
+      path: `/v2/contacts/${params.contact_id}/links`,
+      method: "GET"
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 67: keap_list_contact_link_types
+// API: GET /v2/contacts/links/types
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_list_contact_link_types",
+  `List contact link types (V2).
+
+API Endpoint: GET /v2/contacts/links/types
+
+Args:
+  - filter (string, optional): Filter string
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page`,
+  ListContactLinkTypesInputSchema.shape,
+  async (params: ListContactLinkTypesInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook({
+      path: "/v2/contacts/links/types",
+      method: "GET",
+      query_params
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 68: keap_link_contacts
+// API: POST /v2/contacts:link
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_link_contacts",
+  `Link two contacts (V2).
+
+API Endpoint: POST /v2/contacts:link
+
+Args:
+  - body (object, required):
+    - contact1_id (string, required): First contact ID
+    - contact2_id (string, required): Second contact ID
+    - link_type_id (string, required): Link type ID
+
+Returns:
+  Created contact link object.`,
+  LinkContactsInputSchema.shape,
+  async (params: LinkContactsInput) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/contacts:link",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 69: keap_unlink_contacts
+// API: POST /v2/contacts:unlink
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_unlink_contacts",
+  `Unlink two contacts (V2).
+
+API Endpoint: POST /v2/contacts:unlink
+
+Args:
+  - body (object, required):
+    - contact1_id (string, required): First contact ID
+    - contact2_id (string, required): Second contact ID
+    - link_type_id (string, required): Link type ID
+
+Returns:
+  204 No Content on success.`,
+  LinkContactsInputSchema.shape,
+  async (params: LinkContactsInput) => {
+    const response = await sendToMakeWebhook({
+      path: "/v2/contacts:unlink",
+      method: "POST",
+      body: params.body
+    });
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 70: keap_run_report
+// API: POST /v2/reporting/reports/{report_id}:run
+// ---------------------------------------------------------------------------
+server.tool(
+  "keap_run_report",
+  `Run a saved report (V2).
+
+API Endpoint: POST /v2/reporting/reports/{report_id}:run
+
+Args:
+  - report_id (string, required): Report (Saved Search) ID
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page
+  - fields (string, optional): Comma-delimited fields
+  - fields_as_set (string|array, optional): Fields as array or comma-delimited string
+
+Returns:
+  Report execution results.`,
+  RunReportInputSchema.shape,
+  async (params: RunReportInput) => {
+    const fieldsAsSet = normalizeCommaList(params.fields_as_set);
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      page_token: params.page_token,
+      pageToken: params.page_token,
+      order_by: params.order_by,
+      orderBy: params.order_by,
+      page_size: params.page_size,
+      pageSize: params.page_size,
+      fields: params.fields,
+      fieldsAsSet
+    };
+
+    const response = await sendToMakeWebhook({
+      path: `/v2/reporting/reports/${params.report_id}:run`,
+      method: "POST",
+      query_params
     });
 
     const result = formatToolResponse(response);
