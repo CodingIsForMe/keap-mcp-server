@@ -220,6 +220,82 @@ function normalizeCommaList(value?: string | string[]): string | undefined {
   return Array.isArray(value) ? value.join(",") : value;
 }
 
+interface ContactBodyValidationResult {
+  valid: boolean;
+  body?: Record<string, unknown>;
+  error?: string;
+}
+
+function normalizeContactAddressField(field?: unknown): unknown {
+  if (typeof field !== "string") return field;
+
+  const normalized = field.trim().toUpperCase();
+  if (normalized === "BILL" || normalized === "BILL_TO") return "BILLING";
+  if (normalized === "SHIP" || normalized === "SHIP_TO") return "SHIPPING";
+  return field;
+}
+
+function normalizeLegacyContactAddress(address: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...address };
+
+  if (normalized.line1 === undefined && normalized.street1 !== undefined) {
+    normalized.line1 = normalized.street1;
+  }
+  if (normalized.line2 === undefined && normalized.street2 !== undefined) {
+    normalized.line2 = normalized.street2;
+  }
+  if (normalized.locality === undefined && normalized.city !== undefined) {
+    normalized.locality = normalized.city;
+  }
+  if (normalized.region_code === undefined && typeof normalized.state === "string") {
+    const state = normalized.state.trim().toUpperCase();
+    if (state.length === 2) {
+      normalized.region_code = `US-${state}`;
+    }
+  }
+  if (normalized.country_code === undefined && typeof normalized.country === "string") {
+    const country = normalized.country.trim().toUpperCase();
+    if (country === "US") normalized.country_code = "USA";
+  }
+
+  normalized.field = normalizeContactAddressField(normalized.field);
+
+  delete normalized.street1;
+  delete normalized.street2;
+  delete normalized.city;
+  delete normalized.state;
+
+  return normalized;
+}
+
+function validateAndNormalizeContactBody(body: Record<string, unknown>): ContactBodyValidationResult {
+  const normalized: Record<string, unknown> = { ...body };
+
+  if (Array.isArray(normalized.addresses)) {
+    normalized.addresses = normalized.addresses.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      return normalizeLegacyContactAddress(item as Record<string, unknown>);
+    });
+  }
+
+  if (Array.isArray(normalized.email_addresses)) {
+    const hasEmailStatus = normalized.email_addresses.some((item) => {
+      if (!item || typeof item !== "object") return false;
+      const entry = item as Record<string, unknown>;
+      return entry.email_status !== undefined || entry.email_opt_status !== undefined;
+    });
+
+    if (hasEmailStatus) {
+      return {
+        valid: false,
+        error: "Invalid body for PATCH /v2/contacts: `email_addresses[*].email_status` is not supported. Use `keap_update_email_address_status` to change marketable/non-marketable status."
+      };
+    }
+  }
+
+  return { valid: true, body: normalized };
+}
+
 // =============================================================================
 // Zod Schemas - Contacts (V1 API)
 // =============================================================================
@@ -2437,11 +2513,21 @@ Args:
   - update_mask (string|array, optional): Fields to update
   - fields (string|array, optional): Fields to include in response
   - body (object, required): Contact fields to update
+    - addresses: use V2 keys (line1, line2, locality, region_code, postal_code, country_code, field)
+    - email_addresses: email_status is NOT accepted here (use keap_update_email_address_status)
 
 Returns:
   Updated contact object.`,
   UpdateContactV2InputSchema.shape,
   async (params: UpdateContactV2Input) => {
+    const normalized = validateAndNormalizeContactBody(params.body);
+    if (!normalized.valid) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${normalized.error}` }],
+        isError: true
+      };
+    }
+
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask),
       fields: normalizeCommaList(params.fields)
@@ -2451,7 +2537,7 @@ Returns:
       path: `/v2/contacts/${params.contact_id}`,
       method: "PATCH",
       query_params,
-      body: params.body
+      body: normalized.body
     });
 
     const result = formatToolResponse(response);
