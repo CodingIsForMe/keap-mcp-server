@@ -19,6 +19,7 @@
  * @see https://4SpotConsulting.com
  */
 
+import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
@@ -51,6 +52,8 @@ interface MakeWebhookPayload {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   query_params?: Record<string, string | number | boolean | undefined>;
   body?: Record<string, unknown>;
+  account?: string;
+  sender?: string;
 }
 
 interface MakeWebhookResponse {
@@ -59,6 +62,40 @@ interface MakeWebhookResponse {
   data?: unknown;
   error?: string;
   error_details?: unknown;
+}
+
+/**
+ * Optional routing fields to support multi-account Make.com scenarios
+ */
+interface RoutingInput {
+  account?: string;
+  sender?: string;
+}
+
+const RoutingShape = {
+  account: z.string()
+    .optional()
+    .describe("Routing key for Make scenario (e.g., 'thomas', 'qi140')"),
+  sender: z.string()
+    .optional()
+    .describe("Alias for account routing key (legacy name)")
+};
+
+function withRoutingShape<T extends z.ZodRawShape>(shape: T): T & typeof RoutingShape {
+  return { ...shape, ...RoutingShape };
+}
+
+function getRoutingKey(params: RoutingInput): string | undefined {
+  return params.account ?? params.sender;
+}
+
+function withRouting<T extends MakeWebhookPayload>(params: unknown, payload: T): T {
+  const routingKey = getRoutingKey(params as RoutingInput);
+  return routingKey ? { ...payload, account: routingKey } : payload;
+}
+
+function withRoutingDescription(description: string): string {
+  return `${description}\n\nRouting (optional):\n  - account: Route request to a specific Make.com Keap connection.\n  - sender: Alias for account.`;
 }
 
 // =============================================================================
@@ -103,11 +140,13 @@ async function sendToMakeWebhook(payload: MakeWebhookPayload): Promise<MakeWebho
   }
 
   // Transform query_params to Make.com's required Array of Key-Value Collections format
+  const routingKey = payload.account ?? payload.sender;
   const cleanedPayload = {
     path: payload.path,
     method: payload.method,
     query_params: transformQueryParamsToKeyValueArray(payload.query_params),
-    body: payload.body
+    body: payload.body,
+    ...(routingKey ? { account: routingKey } : {})
   };
 
   try {
@@ -374,11 +413,27 @@ const server = new McpServer({
   version: SERVER_VERSION
 });
 
+function registerTool(
+  name: string,
+  description: string,
+  paramsSchema: z.ZodRawShape,
+  cb: unknown
+): ReturnType<typeof server.registerTool> {
+  return server.registerTool(
+    name,
+    {
+      description: withRoutingDescription(description),
+      inputSchema: paramsSchema
+    },
+    cb as Parameters<typeof server.registerTool>[2]
+  );
+}
+
 // ---------------------------------------------------------------------------
 // TOOL 1: keap_list_contacts
 // API: GET /v1/contacts
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_contacts",
   `List and search contacts in Keap CRM.
 
@@ -404,7 +459,7 @@ Examples:
   - Search by email: { "email": "john@example.com" }
   - Search by name: { "given_name": "John" }
   - Paginated: { "limit": 50, "offset": 100 }`,
-  ListContactsInputSchema.shape,
+  withRoutingShape(ListContactsInputSchema.shape),
   async (params: ListContactsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       tag_id: params.tag_id,
@@ -423,11 +478,11 @@ Examples:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/contacts",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -441,7 +496,7 @@ Examples:
 // TOOL 2: keap_get_contact
 // API: GET /v1/contacts/{id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_contact",
   `Retrieve a single contact by ID from Keap CRM.
 
@@ -457,7 +512,7 @@ Returns:
 Examples:
   - Basic: { "id": 123 }
   - With extra fields: { "id": 123, "optional_properties": ["custom_fields", "tag_ids"] }`,
-  GetContactInputSchema.shape,
+  withRoutingShape(GetContactInputSchema.shape),
   async (params: GetContactInput) => {
     const query_params: Record<string, string | undefined> = {};
 
@@ -465,11 +520,11 @@ Examples:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/contacts/${params.id}`,
       method: "GET",
       query_params: Object.keys(query_params).length > 0 ? query_params : undefined
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -485,7 +540,7 @@ Examples:
 // TOOL 4: keap_list_orders
 // API: GET /v1/orders
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_orders",
   `List orders in Keap CRM with optional filtering.
 
@@ -513,7 +568,7 @@ Examples:
   - By contact: { "contact_id": 123 }
   - Paid only: { "paid": true }
   - Date range: { "since": "2024-01-01T00:00:00.000Z", "until": "2024-12-31T23:59:59.999Z" }`,
-  ListOrdersInputSchema.shape,
+  withRoutingShape(ListOrdersInputSchema.shape),
   async (params: ListOrdersInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -526,11 +581,11 @@ Examples:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/orders",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -544,7 +599,7 @@ Examples:
 // TOOL 5: keap_get_order
 // API: GET /v1/orders/{orderId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_order",
   `Retrieve a single order by ID from Keap CRM.
 
@@ -558,12 +613,12 @@ Returns:
 
 Examples:
   - { "order_id": 12345 }`,
-  GetOrderInputSchema.shape,
+  withRoutingShape(GetOrderInputSchema.shape),
   async (params: GetOrderInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/orders/${params.order_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -711,7 +766,7 @@ type ListTasksInput = z.infer<typeof ListTasksInputSchema>;
 // TOOL 6: keap_list_products
 // API: GET /v1/products
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_products",
   `List products in Keap CRM.
 
@@ -724,7 +779,7 @@ Args:
 
 Returns:
   { products: [...], count, next, previous }`,
-  ListProductsInputSchema.shape,
+  withRoutingShape(ListProductsInputSchema.shape),
   async (params: ListProductsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       active: params.active,
@@ -732,11 +787,11 @@ Returns:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/products",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -750,7 +805,7 @@ Returns:
 // TOOL 7: keap_get_product
 // API: GET /v1/products/{product_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_product",
   `Retrieve a single product by ID from Keap CRM.
 
@@ -761,12 +816,12 @@ Args:
 
 Returns:
   Full product object with pricing, subscription details, etc.`,
-  GetProductInputSchema.shape,
+  withRoutingShape(GetProductInputSchema.shape),
   async (params: GetProductInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/products/${params.product_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -780,7 +835,7 @@ Returns:
 // TOOL 8: keap_list_notes
 // API: GET /v1/notes
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_notes",
   `List notes in Keap CRM with optional filtering.
 
@@ -791,7 +846,7 @@ Args:
   - user_id (integer, optional): Filter by user ID who created the note
   - limit (integer, optional): Number of results to return
   - offset (integer, optional): Number of results to skip`,
-  ListNotesInputSchema.shape,
+  withRoutingShape(ListNotesInputSchema.shape),
   async (params: ListNotesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -800,11 +855,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/notes",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -820,7 +875,7 @@ Args:
 // TOOL 10: keap_list_tasks
 // API: GET /v1/tasks
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_tasks",
   `List tasks in Keap CRM with optional filtering.
 
@@ -834,7 +889,7 @@ Args:
   - since (string, optional): Date to start searching from
   - until (string, optional): Date to search to
   - limit (integer, optional): Number of results`,
-  ListTasksInputSchema.shape,
+  withRoutingShape(ListTasksInputSchema.shape),
   async (params: ListTasksInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -848,11 +903,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/tasks",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -959,7 +1014,7 @@ type ListTagsInput = z.infer<typeof ListTagsInputSchema>;
 // TOOL 12: keap_list_companies
 // API: GET /v1/companies
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_companies",
   `List companies in Keap CRM with optional filtering.
 
@@ -970,7 +1025,7 @@ Args:
   - order (enum, optional): Sort by - 'id', 'date_created', 'name', 'email'
   - limit (integer, optional): Number of results to return
   - offset (integer, optional): Number of results to skip`,
-  ListCompaniesInputSchema.shape,
+  withRoutingShape(ListCompaniesInputSchema.shape),
   async (params: ListCompaniesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       company_name: params.company_name,
@@ -984,11 +1039,11 @@ Args:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/companies",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1002,7 +1057,7 @@ Args:
 // TOOL 13: keap_get_company
 // API: GET /v1/companies/{companyId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_company",
   `Retrieve a single company by ID from Keap CRM.
 
@@ -1011,7 +1066,7 @@ API Endpoint: GET /v1/companies/{companyId}
 Args:
   - company_id (integer, required): Company ID
   - optional_properties (array, optional): Extra fields like 'notes', 'fax_number'`,
-  GetCompanyInputSchema.shape,
+  withRoutingShape(GetCompanyInputSchema.shape),
   async (params: GetCompanyInput) => {
     const query_params: Record<string, string | undefined> = {};
 
@@ -1019,11 +1074,11 @@ Args:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/companies/${params.company_id}`,
       method: "GET",
       query_params: Object.keys(query_params).length > 0 ? query_params : undefined
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1037,7 +1092,7 @@ Args:
 // TOOL 14: keap_list_tags
 // API: GET /v1/tags
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_tags",
   `List tags defined in Keap CRM with optional filtering.
 
@@ -1047,7 +1102,7 @@ Args:
   - name (string, optional): Filter for tags with a specific name
   - category (integer, optional): Category Id of tags to filter by
   - limit (integer, optional): Number of results to return`,
-  ListTagsInputSchema.shape,
+  withRoutingShape(ListTagsInputSchema.shape),
   async (params: ListTagsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       name: params.name,
@@ -1056,11 +1111,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/tags",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1178,7 +1233,7 @@ type GetUserInput = z.infer<typeof GetUserInputSchema>;
 // TOOL 16: keap_list_opportunities
 // API: GET /v1/opportunities
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_opportunities",
   `List opportunities in Keap CRM with optional filtering.
 
@@ -1189,7 +1244,7 @@ Args:
   - stage_id (integer, optional): Filter by pipeline stage ID
   - user_id (integer, optional): Filter by assigned user ID
   - limit (integer, optional): Number of results`,
-  ListOpportunitiesInputSchema.shape,
+  withRoutingShape(ListOpportunitiesInputSchema.shape),
   async (params: ListOpportunitiesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       search_term: params.search_term,
@@ -1200,11 +1255,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/opportunities",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1218,7 +1273,7 @@ Args:
 // TOOL 17: keap_get_opportunity
 // API: GET /v1/opportunities/{opportunityId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_opportunity",
   `Retrieve a single opportunity by ID from Keap CRM.
 
@@ -1227,7 +1282,7 @@ API Endpoint: GET /v1/opportunities/{opportunityId}
 Args:
   - opportunity_id (integer, required): Opportunity ID
   - optional_properties (array, optional): Extra fields like 'custom_fields'`,
-  GetOpportunityInputSchema.shape,
+  withRoutingShape(GetOpportunityInputSchema.shape),
   async (params: GetOpportunityInput) => {
     const query_params: Record<string, string | undefined> = {};
 
@@ -1235,11 +1290,11 @@ Args:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/opportunities/${params.opportunity_id}`,
       method: "GET",
       query_params: Object.keys(query_params).length > 0 ? query_params : undefined
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1255,7 +1310,7 @@ Args:
 // TOOL 19: keap_list_users
 // API: GET /v1/users
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_users",
   `List users in Keap CRM.
 
@@ -1265,7 +1320,7 @@ Args:
   - include_inactive (boolean, optional): Include inactive users
   - include_partners (boolean, optional): Include partner users
   - limit (integer, optional): Number of results`,
-  ListUsersInputSchema.shape,
+  withRoutingShape(ListUsersInputSchema.shape),
   async (params: ListUsersInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       include_inactive: params.include_inactive,
@@ -1274,11 +1329,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/users",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1292,7 +1347,7 @@ Args:
 // TOOL 20: keap_get_user
 // API: GET /v2/users/{user_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_user",
   `Retrieve a single user by ID from Keap CRM.
 
@@ -1301,12 +1356,12 @@ API Endpoint: GET /v2/users/{user_id}
 
 Args:
   - user_id (string, required): User ID`,
-  GetUserInputSchema.shape,
+  withRoutingShape(GetUserInputSchema.shape),
   async (params: GetUserInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/users/${params.user_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1514,7 +1569,7 @@ type GetAppointmentInput = z.infer<typeof GetAppointmentInputSchema>;
 // TOOL 21: keap_list_files
 // API: GET /v1/files
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_files",
   `List files in Keap CRM with optional filtering.
 
@@ -1525,7 +1580,7 @@ Args:
   - name (string, optional): Filter by name, supports wildcards
   - type (enum, optional): File type (Application, Image, Fax, Attachment, etc.)
   - limit (integer, optional): Number of results to return`,
-  ListFilesInputSchema.shape,
+  withRoutingShape(ListFilesInputSchema.shape),
   async (params: ListFilesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -1535,11 +1590,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/files",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1553,7 +1608,7 @@ Args:
 // TOOL 22: keap_get_file
 // API: GET /v1/files/{fileId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_file",
   `Retrieve metadata for a specific file in Keap CRM.
 
@@ -1562,7 +1617,7 @@ API Endpoint: GET /v1/files/{fileId}
 Args:
   - file_id (integer, required): File ID
   - optional_properties (array, optional): Extra fields like 'file_data'`,
-  GetFileInputSchema.shape,
+  withRoutingShape(GetFileInputSchema.shape),
   async (params: GetFileInput) => {
     const query_params: Record<string, string | undefined> = {};
 
@@ -1570,11 +1625,11 @@ Args:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/files/${params.file_id}`,
       method: "GET",
       query_params: Object.keys(query_params).length > 0 ? query_params : undefined
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1588,7 +1643,7 @@ Args:
 // TOOL 23: keap_list_transactions
 // API: GET /v1/transactions
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_transactions",
   `List transactions in Keap CRM with optional filtering.
 
@@ -1600,7 +1655,7 @@ Args:
   - since (string, optional): Date to start searching from
   - until (string, optional): Date to search to
   - limit (integer, optional): Number of results to return`,
-  ListTransactionsInputSchema.shape,
+  withRoutingShape(ListTransactionsInputSchema.shape),
   async (params: ListTransactionsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -1610,11 +1665,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/transactions",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1628,7 +1683,7 @@ Args:
 // TOOL 24: keap_list_campaigns
 // API: GET /v1/campaigns
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_campaigns",
   `List marketing automation campaigns in Keap CRM.
 
@@ -1638,7 +1693,7 @@ Args:
   - search_text (string, optional): Text to search campaigns
   - order (enum, optional): Sort by 'id', 'name', 'status', etc.
   - limit (integer, optional): Number of results to return`,
-  ListCampaignsInputSchema.shape,
+  withRoutingShape(ListCampaignsInputSchema.shape),
   async (params: ListCampaignsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       search_text: params.search_text,
@@ -1648,11 +1703,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/campaigns",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1666,7 +1721,7 @@ Args:
 // TOOL 25: keap_get_campaign
 // API: GET /v1/campaigns/{campaignId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_campaign",
   `Retrieve a single campaign by ID from Keap CRM.
 
@@ -1675,7 +1730,7 @@ API Endpoint: GET /v1/campaigns/{campaignId}
 Args:
   - campaign_id (integer, required): Campaign ID
   - optional_properties (array, optional): Extra fields like 'goals', 'sequences'`,
-  GetCampaignInputSchema.shape,
+  withRoutingShape(GetCampaignInputSchema.shape),
   async (params: GetCampaignInput) => {
     const query_params: Record<string, string | undefined> = {};
 
@@ -1683,11 +1738,11 @@ Args:
       query_params.optional_properties = params.optional_properties.join(",");
     }
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/campaigns/${params.campaign_id}`,
       method: "GET",
       query_params: Object.keys(query_params).length > 0 ? query_params : undefined
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1701,7 +1756,7 @@ Args:
 // TOOL 26: keap_list_appointments
 // API: GET /v1/appointments
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_appointments",
   `List appointments in Keap CRM with optional filtering.
 
@@ -1712,7 +1767,7 @@ Args:
   - since (string, optional): Date to start searching from
   - until (string, optional): Date to search to
   - limit (integer, optional): Number of results to return`,
-  ListAppointmentsInputSchema.shape,
+  withRoutingShape(ListAppointmentsInputSchema.shape),
   async (params: ListAppointmentsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -1722,11 +1777,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/appointments",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1740,7 +1795,7 @@ Args:
 // TOOL 27: keap_get_appointment
 // API: GET /v1/appointments/{appointmentId}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_appointment",
   `Retrieve a single appointment by ID from Keap CRM.
 
@@ -1748,12 +1803,12 @@ API Endpoint: GET /v1/appointments/{appointmentId}
 
 Args:
   - appointment_id (integer, required): Appointment ID`,
-  GetAppointmentInputSchema.shape,
+  withRoutingShape(GetAppointmentInputSchema.shape),
   async (params: GetAppointmentInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/appointments/${params.appointment_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1835,7 +1890,7 @@ type ListOpportunityStagesInput = z.infer<typeof ListOpportunityStagesInputSchem
 // TOOL 28: keap_list_emails
 // API: GET /v1/emails
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_emails",
   `List email records in Keap CRM.
 
@@ -1847,7 +1902,7 @@ Args:
   - since_sent_date (string, optional): ISO 8601 date
   - until_sent_date (string, optional): ISO 8601 date
   - limit (integer, optional): Number of results`,
-  ListEmailsInputSchema.shape,
+  withRoutingShape(ListEmailsInputSchema.shape),
   async (params: ListEmailsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       contact_id: params.contact_id,
@@ -1859,11 +1914,11 @@ Args:
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/emails",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1877,7 +1932,7 @@ Args:
 // TOOL 29: keap_get_email
 // API: GET /v1/emails/{id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_email",
   `Retrieve a single email record by ID from Keap CRM.
 
@@ -1885,12 +1940,12 @@ API Endpoint: GET /v1/emails/{id}
 
 Args:
   - email_id (integer, required): Email record ID`,
-  GetEmailInputSchema.shape,
+  withRoutingShape(GetEmailInputSchema.shape),
   async (params: GetEmailInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/emails/${params.email_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -1904,19 +1959,19 @@ Args:
 // TOOL 30: keap_list_opportunity_stages
 // API: GET /v1/opportunity/stage_pipeline
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_opportunity_stages",
   `List all opportunity stages with pipeline details.
 
 API Endpoint: GET /v1/opportunity/stage_pipeline
 
 No parameters required. Useful for finding stage_id values for opportunities.`,
-  ListOpportunityStagesInputSchema.shape,
-  async (_params: ListOpportunityStagesInput) => {
-    const response = await sendToMakeWebhook({
+  withRoutingShape(ListOpportunityStagesInputSchema.shape),
+  async (params: ListOpportunityStagesInput) => {
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v1/opportunity/stage_pipeline",
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2389,7 +2444,7 @@ type GetWebformDataV2Input = z.infer<typeof GetWebformDataV2InputSchema>;
 // TOOL 31: keap_create_contact
 // API: POST /v2/contacts
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_contact",
   `Create a new contact in Keap (V2).
 
@@ -2401,18 +2456,18 @@ Args:
 
 Returns:
   Created contact object.`,
-  CreateContactV2InputSchema.shape,
+  withRoutingShape(CreateContactV2InputSchema.shape),
   async (params: CreateContactV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       fields: normalizeCommaList(params.fields)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/contacts",
       method: "POST",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2426,7 +2481,7 @@ Returns:
 // TOOL 32: keap_update_contact
 // API: PATCH /v2/contacts/{contact_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_contact",
   `Update an existing contact in Keap (V2).
 
@@ -2440,19 +2495,19 @@ Args:
 
 Returns:
   Updated contact object.`,
-  UpdateContactV2InputSchema.shape,
+  withRoutingShape(UpdateContactV2InputSchema.shape),
   async (params: UpdateContactV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask),
       fields: normalizeCommaList(params.fields)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2466,7 +2521,7 @@ Returns:
 // TOOL 33: keap_delete_contact
 // API: DELETE /v2/contacts/{contact_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_contact",
   `Delete a contact in Keap (V2).
 
@@ -2477,12 +2532,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteContactV2InputSchema.shape,
+  withRoutingShape(DeleteContactV2InputSchema.shape),
   async (params: DeleteContactV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2496,7 +2551,7 @@ Returns:
 // TOOL 34: keap_create_company
 // API: POST /v2/companies
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_company",
   `Create a new company in Keap (V2).
 
@@ -2507,13 +2562,13 @@ Args:
 
 Returns:
   Created company object.`,
-  CreateCompanyV2InputSchema.shape,
+  withRoutingShape(CreateCompanyV2InputSchema.shape),
   async (params: CreateCompanyV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/companies",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2527,7 +2582,7 @@ Returns:
 // TOOL 35: keap_update_company
 // API: PATCH /v2/companies/{company_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_company",
   `Update an existing company in Keap (V2).
 
@@ -2540,18 +2595,18 @@ Args:
 
 Returns:
   Updated company object.`,
-  UpdateCompanyV2InputSchema.shape,
+  withRoutingShape(UpdateCompanyV2InputSchema.shape),
   async (params: UpdateCompanyV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/companies/${params.company_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2565,7 +2620,7 @@ Returns:
 // TOOL 36: keap_delete_company
 // API: DELETE /v2/companies/{company_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_company",
   `Delete a company in Keap (V2).
 
@@ -2576,12 +2631,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteCompanyV2InputSchema.shape,
+  withRoutingShape(DeleteCompanyV2InputSchema.shape),
   async (params: DeleteCompanyV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/companies/${params.company_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2595,7 +2650,7 @@ Returns:
 // TOOL 37: keap_create_note
 // API: POST /v2/contacts/{contact_id}/notes
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_note",
   `Create a note for a contact in Keap (V2).
 
@@ -2607,13 +2662,13 @@ Args:
 
 Returns:
   Created note object.`,
-  CreateNoteV2InputSchema.shape,
+  withRoutingShape(CreateNoteV2InputSchema.shape),
   async (params: CreateNoteV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}/notes`,
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2627,7 +2682,7 @@ Returns:
 // TOOL 38: keap_update_note
 // API: PATCH /v2/contacts/{contact_id}/notes/{note_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_note",
   `Update a note for a contact in Keap (V2).
 
@@ -2641,18 +2696,18 @@ Args:
 
 Returns:
   Updated note object.`,
-  UpdateNoteV2InputSchema.shape,
+  withRoutingShape(UpdateNoteV2InputSchema.shape),
   async (params: UpdateNoteV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}/notes/${params.note_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2666,7 +2721,7 @@ Returns:
 // TOOL 39: keap_delete_note
 // API: DELETE /v2/contacts/{contact_id}/notes/{note_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_note",
   `Delete a note for a contact in Keap (V2).
 
@@ -2678,12 +2733,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteNoteV2InputSchema.shape,
+  withRoutingShape(DeleteNoteV2InputSchema.shape),
   async (params: DeleteNoteV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}/notes/${params.note_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2697,7 +2752,7 @@ Returns:
 // TOOL 40: keap_create_task
 // API: POST /v2/tasks
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_task",
   `Create a task in Keap (V2).
 
@@ -2708,13 +2763,13 @@ Args:
 
 Returns:
   Created task object.`,
-  CreateTaskV2InputSchema.shape,
+  withRoutingShape(CreateTaskV2InputSchema.shape),
   async (params: CreateTaskV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/tasks",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2728,7 +2783,7 @@ Returns:
 // TOOL 41: keap_update_task
 // API: PATCH /v2/tasks/{task_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_task",
   `Update a task in Keap (V2).
 
@@ -2741,18 +2796,18 @@ Args:
 
 Returns:
   Updated task object.`,
-  UpdateTaskV2InputSchema.shape,
+  withRoutingShape(UpdateTaskV2InputSchema.shape),
   async (params: UpdateTaskV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tasks/${params.task_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2766,7 +2821,7 @@ Returns:
 // TOOL 42: keap_delete_task
 // API: DELETE /v2/tasks/{task_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_task",
   `Delete a task in Keap (V2).
 
@@ -2777,12 +2832,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteTaskV2InputSchema.shape,
+  withRoutingShape(DeleteTaskV2InputSchema.shape),
   async (params: DeleteTaskV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tasks/${params.task_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2796,7 +2851,7 @@ Returns:
 // TOOL 43: keap_create_tag
 // API: POST /v2/tags
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_tag",
   `Create a tag in Keap (V2).
 
@@ -2807,13 +2862,13 @@ Args:
 
 Returns:
   Created tag object.`,
-  CreateTagV2InputSchema.shape,
+  withRoutingShape(CreateTagV2InputSchema.shape),
   async (params: CreateTagV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/tags",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2827,7 +2882,7 @@ Returns:
 // TOOL 44: keap_update_tag
 // API: PATCH /v2/tags/{tag_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_tag",
   `Update a tag in Keap (V2).
 
@@ -2840,18 +2895,18 @@ Args:
 
 Returns:
   Updated tag object.`,
-  UpdateTagV2InputSchema.shape,
+  withRoutingShape(UpdateTagV2InputSchema.shape),
   async (params: UpdateTagV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tags/${params.tag_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2865,7 +2920,7 @@ Returns:
 // TOOL 45: keap_delete_tag
 // API: DELETE /v2/tags/{tag_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_tag",
   `Delete a tag in Keap (V2).
 
@@ -2876,12 +2931,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteTagV2InputSchema.shape,
+  withRoutingShape(DeleteTagV2InputSchema.shape),
   async (params: DeleteTagV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tags/${params.tag_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2895,7 +2950,7 @@ Returns:
 // TOOL 46: keap_apply_tag
 // API: POST /v2/tags/{tag_id}/contacts:applyTags
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_apply_tag",
   `Apply a tag to a list of contacts (V2).
 
@@ -2908,13 +2963,13 @@ Args:
 
 Returns:
   Apply tags response.`,
-  ApplyTagV2InputSchema.shape,
+  withRoutingShape(ApplyTagV2InputSchema.shape),
   async (params: ApplyTagV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tags/${params.tag_id}/contacts:applyTags`,
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2928,7 +2983,7 @@ Returns:
 // TOOL 47: keap_remove_tag
 // API: POST /v2/tags/{tag_id}/contacts:removeTags
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_remove_tag",
   `Remove a tag from a list of contacts (V2).
 
@@ -2941,13 +2996,13 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  RemoveTagV2InputSchema.shape,
+  withRoutingShape(RemoveTagV2InputSchema.shape),
   async (params: RemoveTagV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/tags/${params.tag_id}/contacts:removeTags`,
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2961,7 +3016,7 @@ Returns:
 // TOOL 48: keap_create_opportunity
 // API: POST /v2/opportunities
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_opportunity",
   `Create an opportunity in Keap (V2).
 
@@ -2972,13 +3027,13 @@ Args:
 
 Returns:
   Created opportunity object.`,
-  CreateOpportunityV2InputSchema.shape,
+  withRoutingShape(CreateOpportunityV2InputSchema.shape),
   async (params: CreateOpportunityV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/opportunities",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -2992,7 +3047,7 @@ Returns:
 // TOOL 49: keap_update_opportunity
 // API: PATCH /v2/opportunities/{opportunity_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_opportunity",
   `Update an opportunity in Keap (V2).
 
@@ -3005,18 +3060,18 @@ Args:
 
 Returns:
   Updated opportunity object.`,
-  UpdateOpportunityV2InputSchema.shape,
+  withRoutingShape(UpdateOpportunityV2InputSchema.shape),
   async (params: UpdateOpportunityV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/opportunities/${params.opportunity_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3030,7 +3085,7 @@ Returns:
 // TOOL 50: keap_delete_opportunity
 // API: DELETE /v2/opportunities/{opportunity_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_opportunity",
   `Delete an opportunity in Keap (V2).
 
@@ -3041,12 +3096,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteOpportunityV2InputSchema.shape,
+  withRoutingShape(DeleteOpportunityV2InputSchema.shape),
   async (params: DeleteOpportunityV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/opportunities/${params.opportunity_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3060,7 +3115,7 @@ Returns:
 // TOOL 51: keap_create_email
 // API: POST /v2/emails
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_email",
   `Create an email record in Keap (V2).
 
@@ -3071,13 +3126,13 @@ Args:
 
 Returns:
   Created email record.`,
-  CreateEmailV2InputSchema.shape,
+  withRoutingShape(CreateEmailV2InputSchema.shape),
   async (params: CreateEmailV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/emails",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3091,7 +3146,7 @@ Returns:
 // TOOL 52: keap_send_email
 // API: POST /v2/emails:send
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_send_email",
   `Send an email to contacts in Keap (V2).
 
@@ -3102,13 +3157,13 @@ Args:
 
 Returns:
   202 Accepted on success.`,
-  SendEmailV2InputSchema.shape,
+  withRoutingShape(SendEmailV2InputSchema.shape),
   async (params: SendEmailV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/emails:send",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3122,7 +3177,7 @@ Returns:
 // TOOL 53: keap_delete_email
 // API: DELETE /v2/emails/{id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_delete_email",
   `Delete an email record in Keap (V2).
 
@@ -3133,12 +3188,12 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  DeleteEmailV2InputSchema.shape,
+  withRoutingShape(DeleteEmailV2InputSchema.shape),
   async (params: DeleteEmailV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/emails/${params.email_id}`,
       method: "DELETE"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3152,7 +3207,7 @@ Returns:
 // TOOL 54: keap_get_email_address_status
 // API: GET /v2/emailAddresses/{email}/status
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_email_address_status",
   `Retrieve email address status in Keap (V2).
 
@@ -3163,12 +3218,12 @@ Args:
 
 Returns:
   Email address status object.`,
-  EmailAddressStatusInputSchema.shape,
+  withRoutingShape(EmailAddressStatusInputSchema.shape),
   async (params: EmailAddressStatusInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/emailAddresses/${params.email}/status`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3182,7 +3237,7 @@ Returns:
 // TOOL 55: keap_update_email_address_status
 // API: PATCH /v2/emailAddresses/{email}/status
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_email_address_status",
   `Update email address status in Keap (V2).
 
@@ -3194,13 +3249,13 @@ Args:
 
 Returns:
   Updated email address status object.`,
-  UpdateEmailAddressStatusInputSchema.shape,
+  withRoutingShape(UpdateEmailAddressStatusInputSchema.shape),
   async (params: UpdateEmailAddressStatusInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/emailAddresses/${params.email}/status`,
       method: "PATCH",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3214,7 +3269,7 @@ Returns:
 // TOOL 56: keap_add_contacts_to_campaign_sequence
 // API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:addContacts
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_add_contacts_to_campaign_sequence",
   `Add contacts to a campaign sequence in Keap (V2).
 
@@ -3227,13 +3282,13 @@ Args:
 
 Returns:
   Map of contact IDs to results.`,
-  AddContactsToCampaignSequenceInputSchema.shape,
+  withRoutingShape(AddContactsToCampaignSequenceInputSchema.shape),
   async (params: AddContactsToCampaignSequenceInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/campaigns/${params.campaign_id}/sequences/${params.sequence_id}:addContacts`,
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3247,7 +3302,7 @@ Returns:
 // TOOL 57: keap_remove_contacts_from_campaign_sequence
 // API: POST /v2/campaigns/{campaign_id}/sequences/{sequence_id}:removeContacts
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_remove_contacts_from_campaign_sequence",
   `Remove contacts from a campaign sequence in Keap (V2).
 
@@ -3260,13 +3315,13 @@ Args:
 
 Returns:
   Map of contact IDs to results.`,
-  RemoveContactsFromCampaignSequenceInputSchema.shape,
+  withRoutingShape(RemoveContactsFromCampaignSequenceInputSchema.shape),
   async (params: RemoveContactsFromCampaignSequenceInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/campaigns/${params.campaign_id}/sequences/${params.sequence_id}:removeContacts`,
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3280,7 +3335,7 @@ Returns:
 // TOOL 58: keap_update_user
 // API: PATCH /v2/users/{user_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_update_user",
   `Update a user in Keap (V2).
 
@@ -3293,18 +3348,18 @@ Args:
 
 Returns:
   Updated user object.`,
-  UpdateUserV2InputSchema.shape,
+  withRoutingShape(UpdateUserV2InputSchema.shape),
   async (params: UpdateUserV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       update_mask: normalizeCommaList(params.update_mask)
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/users/${params.user_id}`,
       method: "PATCH",
       query_params,
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3318,19 +3373,19 @@ Returns:
 // TOOL 59: keap_list_user_groups
 // API: GET /v2/userGroups
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_user_groups",
   `List user groups in Keap (V2).
 
 API Endpoint: GET /v2/userGroups
 
 No parameters required.`,
-  ListUserGroupsV2InputSchema.shape,
-  async (_params: ListUserGroupsV2Input) => {
-    const response = await sendToMakeWebhook({
+  withRoutingShape(ListUserGroupsV2InputSchema.shape),
+  async (params: ListUserGroupsV2Input) => {
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/userGroups",
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3344,7 +3399,7 @@ No parameters required.`,
 // TOOL 60: keap_get_user_group
 // API: GET /v2/userGroups/{user_group_id}
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_user_group",
   `Retrieve a user group in Keap (V2).
 
@@ -3352,12 +3407,12 @@ API Endpoint: GET /v2/userGroups/{user_group_id}
 
 Args:
   - user_group_id (string, required): User group ID`,
-  GetUserGroupV2InputSchema.shape,
+  withRoutingShape(GetUserGroupV2InputSchema.shape),
   async (params: GetUserGroupV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/userGroups/${params.user_group_id}`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3371,7 +3426,7 @@ Args:
 // TOOL 61: keap_list_webforms
 // API: GET /v2/webforms
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_webforms",
   `List webforms in Keap (V2).
 
@@ -3382,7 +3437,7 @@ Args:
   - page_token (string, optional): Page token
   - order_by (string, optional): Order by field and direction
   - page_size (integer, optional): Results per page`,
-  ListWebformsV2InputSchema.shape,
+  withRoutingShape(ListWebformsV2InputSchema.shape),
   async (params: ListWebformsV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       filter: params.filter,
@@ -3391,11 +3446,11 @@ Args:
       page_size: params.page_size
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/webforms",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3409,7 +3464,7 @@ Args:
 // TOOL 62: keap_get_webform_data
 // API: GET /v2/webforms/{webform_id}:data
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_get_webform_data",
   `Retrieve submitted data for a webform in Keap (V2).
 
@@ -3417,12 +3472,12 @@ API Endpoint: GET /v2/webforms/{webform_id}:data
 
 Args:
   - webform_id (string, required): Webform ID`,
-  GetWebformDataV2InputSchema.shape,
+  withRoutingShape(GetWebformDataV2InputSchema.shape),
   async (params: GetWebformDataV2Input) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/webforms/${params.webform_id}:data`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3436,7 +3491,7 @@ Args:
 // TOOL 63: keap_list_tag_categories
 // API: GET /v2/tags/categories
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_tag_categories",
   `List tag categories in Keap (V2).
 
@@ -3447,7 +3502,7 @@ Args:
   - page_token (string, optional): Page token
   - order_by (string, optional): Order by field and direction
   - page_size (integer, optional): Results per page`,
-  ListTagCategoriesInputSchema.shape,
+  withRoutingShape(ListTagCategoriesInputSchema.shape),
   async (params: ListTagCategoriesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       filter: params.filter,
@@ -3456,11 +3511,11 @@ Args:
       page_size: params.page_size
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/tags/categories",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3474,7 +3529,7 @@ Args:
 // TOOL 64: keap_create_tag_category
 // API: POST /v2/tags/categories
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_create_tag_category",
   `Create a tag category in Keap (V2).
 
@@ -3487,13 +3542,13 @@ Args:
 
 Returns:
   Created tag category object.`,
-  CreateTagCategoryInputSchema.shape,
+  withRoutingShape(CreateTagCategoryInputSchema.shape),
   async (params: CreateTagCategoryInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/tags/categories",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3507,7 +3562,7 @@ Returns:
 // TOOL 65: keap_list_contact_tags
 // API: GET /v1/contacts/{contact_id}/tags
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_contact_tags",
   `List tags applied to a contact (V1).
 
@@ -3517,18 +3572,18 @@ Args:
   - contact_id (string, required): Contact ID
   - limit (integer, optional): Results per page
   - offset (integer, optional): Offset for pagination`,
-  ListContactTagsInputSchema.shape,
+  withRoutingShape(ListContactTagsInputSchema.shape),
   async (params: ListContactTagsInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       limit: params.limit,
       offset: params.offset
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v1/contacts/${params.contact_id}/tags`,
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3542,7 +3597,7 @@ Args:
 // TOOL 66: keap_list_contact_links
 // API: GET /v2/contacts/{contact_id}/links
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_contact_links",
   `List contact links for a contact (V2).
 
@@ -3550,12 +3605,12 @@ API Endpoint: GET /v2/contacts/{contact_id}/links
 
 Args:
   - contact_id (string, required): Contact ID`,
-  ListContactLinksInputSchema.shape,
+  withRoutingShape(ListContactLinksInputSchema.shape),
   async (params: ListContactLinksInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/contacts/${params.contact_id}/links`,
       method: "GET"
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3569,7 +3624,7 @@ Args:
 // TOOL 67: keap_list_contact_link_types
 // API: GET /v2/contacts/links/types
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_list_contact_link_types",
   `List contact link types (V2).
 
@@ -3580,7 +3635,7 @@ Args:
   - page_token (string, optional): Page token
   - order_by (string, optional): Order by field and direction
   - page_size (integer, optional): Results per page`,
-  ListContactLinkTypesInputSchema.shape,
+  withRoutingShape(ListContactLinkTypesInputSchema.shape),
   async (params: ListContactLinkTypesInput) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
       filter: params.filter,
@@ -3589,11 +3644,11 @@ Args:
       page_size: params.page_size
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/contacts/links/types",
       method: "GET",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3607,7 +3662,7 @@ Args:
 // TOOL 68: keap_link_contacts
 // API: POST /v2/contacts:link
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_link_contacts",
   `Link two contacts (V2).
 
@@ -3621,13 +3676,13 @@ Args:
 
 Returns:
   Created contact link object.`,
-  LinkContactsInputSchema.shape,
+  withRoutingShape(LinkContactsInputSchema.shape),
   async (params: LinkContactsInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/contacts:link",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3641,7 +3696,7 @@ Returns:
 // TOOL 69: keap_unlink_contacts
 // API: POST /v2/contacts:unlink
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_unlink_contacts",
   `Unlink two contacts (V2).
 
@@ -3655,13 +3710,13 @@ Args:
 
 Returns:
   204 No Content on success.`,
-  LinkContactsInputSchema.shape,
+  withRoutingShape(LinkContactsInputSchema.shape),
   async (params: LinkContactsInput) => {
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: "/v2/contacts:unlink",
       method: "POST",
       body: params.body
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3675,7 +3730,7 @@ Returns:
 // TOOL 70: keap_run_report
 // API: POST /v2/reporting/reports/{report_id}:run
 // ---------------------------------------------------------------------------
-server.tool(
+registerTool(
   "keap_run_report",
   `Run a saved report (V2).
 
@@ -3691,7 +3746,7 @@ Args:
 
 Returns:
   Report execution results.`,
-  RunReportInputSchema.shape,
+  withRoutingShape(RunReportInputSchema.shape),
   async (params: RunReportInput) => {
     const fieldsAsSet = normalizeCommaList(params.fields_as_set);
     const query_params: Record<string, string | number | boolean | undefined> = {
@@ -3705,11 +3760,11 @@ Returns:
       fieldsAsSet
     };
 
-    const response = await sendToMakeWebhook({
+    const response = await sendToMakeWebhook(withRouting(params, {
       path: `/v2/reporting/reports/${params.report_id}:run`,
       method: "POST",
       query_params
-    });
+    }));
 
     const result = formatToolResponse(response);
     return {
@@ -3763,3 +3818,6 @@ runServer().catch((error) => {
   console.error("Server error:", error);
   process.exit(1);
 });
+
+
+
