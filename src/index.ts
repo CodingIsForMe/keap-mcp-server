@@ -2569,6 +2569,7 @@ Args:
   - fields (string|array, optional): Fields to include in response
   - body (object, required): Contact fields to update
     - addresses: use V2 keys (line1, line2, locality, region_code, postal_code, country_code, field)
+    - addresses: include field (BILLING, SHIPPING, or OTHER); Keap may treat this list as replace semantics
     - email_addresses: email_status is NOT accepted here (use keap_update_email_address_status)
 
 Returns:
