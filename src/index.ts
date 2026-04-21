@@ -3861,6 +3861,176 @@ Returns:
   }
 );
 
+const ListAutomationsV2InputSchema = z.object({
+  filter: z.string().optional().describe("Filter string (for example: status==DRAFT)"),
+  page_token: z.string().optional().describe("Page token"),
+  order_by: z.string().optional().describe("Order by field and direction"),
+  page_size: z.number().int().min(0).max(1000).optional().describe("Results per page")
+}).strict();
+
+type ListAutomationsV2Input = z.infer<typeof ListAutomationsV2InputSchema>;
+
+const GetAutomationV2InputSchema = z.object({
+  automation_id: z.string().describe("Automation ID (path parameter)")
+}).strict();
+
+type GetAutomationV2Input = z.infer<typeof GetAutomationV2InputSchema>;
+
+const ListAutomationIdsV2InputSchema = z.object({
+  filter: z.string().optional().describe("Filter string (for example: status==DRAFT)"),
+  page_token: z.string().optional().describe("Page token"),
+  order_by: z.string().optional().describe("Order by field and direction"),
+  page_size: z.number().int().min(0).max(1000).optional().describe("Results per page")
+}).strict();
+
+type ListAutomationIdsV2Input = z.infer<typeof ListAutomationIdsV2InputSchema>;
+
+const ListAutomationCategoriesV2InputSchema = z.object({}).strict();
+
+type ListAutomationCategoriesV2Input = z.infer<typeof ListAutomationCategoriesV2InputSchema>;
+
+// ---------------------------------------------------------------------------
+// TOOL 71: keap_list_automations
+// API: GET /v2/automations
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_list_automations",
+  `List automations in Keap (V2).
+
+API Endpoint: GET /v2/automations
+
+Args:
+  - filter (string, optional): Filter expression
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page
+
+Returns:
+  Automation list with IDs and metadata.`,
+  withRoutingShape(ListAutomationsV2InputSchema.shape),
+  async (params: ListAutomationsV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: "/v2/automations",
+      method: "GET",
+      query_params
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 72: keap_get_automation
+// API: GET /v2/automations/{automation_id}
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_get_automation",
+  `Retrieve a single automation by ID in Keap (V2).
+
+API Endpoint: GET /v2/automations/{automation_id}
+
+Args:
+  - automation_id (string, required): Automation ID
+
+Returns:
+  Full automation JSON structure for the requested automation.`,
+  withRoutingShape(GetAutomationV2InputSchema.shape),
+  async (params: GetAutomationV2Input) => {
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: `/v2/automations/${params.automation_id}`,
+      method: "GET"
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 73: keap_list_automation_ids
+// API: GET /v2/automations/ids
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_list_automation_ids",
+  `List automation IDs in Keap (V2).
+
+API Endpoint: GET /v2/automations/ids
+
+Args:
+  - filter (string, optional): Filter expression
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page
+
+Returns:
+  Automation IDs and locked automation IDs.`,
+  withRoutingShape(ListAutomationIdsV2InputSchema.shape),
+  async (params: ListAutomationIdsV2Input) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: "/v2/automations/ids",
+      method: "GET",
+      query_params
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 74: keap_list_automation_categories
+// API: GET /v2/automationCategory
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_list_automation_categories",
+  `List automation categories in Keap (V2).
+
+API Endpoint: GET /v2/automationCategory
+
+Args:
+  - none
+
+Returns:
+  Automation category records.`,
+  withRoutingShape(ListAutomationCategoriesV2InputSchema.shape),
+  async (params: ListAutomationCategoriesV2Input) => {
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: "/v2/automationCategory",
+      method: "GET"
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
 // =============================================================================
 // Transport Handlers
 // =============================================================================
