@@ -2331,6 +2331,21 @@ const LinkContactsInputSchema = z.object({
 
 type LinkContactsInput = z.infer<typeof LinkContactsInputSchema>;
 
+const ListReportsInputSchema = z.object({
+  filter: z.string().optional().describe("Filter string"),
+  page_token: z.string().optional().describe("Page token"),
+  order_by: z.string().optional().describe("Order by field and direction"),
+  page_size: z.number().int().min(0).max(1000).optional().describe("Results per page")
+}).strict();
+
+type ListReportsInput = z.infer<typeof ListReportsInputSchema>;
+
+const GetReportInputSchema = z.object({
+  report_id: z.string().describe("Report (Saved Search) ID")
+}).strict();
+
+type GetReportInput = z.infer<typeof GetReportInputSchema>;
+
 const RunReportInputSchema = z.object({
   report_id: z.string().describe("Report (Saved Search) ID"),
   page_token: z.string().optional(),
@@ -3814,7 +3829,78 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 70: keap_run_report
+// TOOL 70: keap_list_reports
+// API: GET /v2/reporting/reports
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_list_reports",
+  `List available saved reports in Keap (V2).
+
+API Endpoint: GET /v2/reporting/reports
+
+Args:
+  - filter (string, optional): Filter string
+  - page_token (string, optional): Page token
+  - order_by (string, optional): Order by field and direction
+  - page_size (integer, optional): Results per page
+
+Returns:
+  Saved report metadata with pagination token.`,
+  withRoutingShape(ListReportsInputSchema.shape),
+  async (params: ListReportsInput) => {
+    const query_params: Record<string, string | number | boolean | undefined> = {
+      filter: params.filter,
+      page_token: params.page_token,
+      order_by: params.order_by,
+      page_size: params.page_size
+    };
+
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: "/v2/reporting/reports",
+      method: "GET",
+      query_params
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 71: keap_get_report
+// API: GET /v2/reporting/reports/{report_id}
+// ---------------------------------------------------------------------------
+registerTool(
+  "keap_get_report",
+  `Retrieve a single saved report definition in Keap (V2).
+
+API Endpoint: GET /v2/reporting/reports/{report_id}
+
+Args:
+  - report_id (string, required): Report (Saved Search) ID
+
+Returns:
+  Saved report JSON metadata.`,
+  withRoutingShape(GetReportInputSchema.shape),
+  async (params: GetReportInput) => {
+    const response = await sendToMakeWebhook(withRouting(params, {
+      path: `/v2/reporting/reports/${params.report_id}`,
+      method: "GET"
+    }));
+
+    const result = formatToolResponse(response);
+    return {
+      content: [{ type: "text" as const, text: result.content }],
+      isError: !result.success
+    };
+  }
+);
+
+// ---------------------------------------------------------------------------
+// TOOL 72: keap_run_report
 // API: POST /v2/reporting/reports/{report_id}:run
 // ---------------------------------------------------------------------------
 registerTool(
@@ -3890,7 +3976,7 @@ const ListAutomationCategoriesV2InputSchema = z.object({}).strict();
 type ListAutomationCategoriesV2Input = z.infer<typeof ListAutomationCategoriesV2InputSchema>;
 
 // ---------------------------------------------------------------------------
-// TOOL 71: keap_list_automations
+// TOOL 73: keap_list_automations
 // API: GET /v2/automations
 // ---------------------------------------------------------------------------
 registerTool(
@@ -3931,7 +4017,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 72: keap_get_automation
+// TOOL 74: keap_get_automation
 // API: GET /v2/automations/{automation_id}
 // ---------------------------------------------------------------------------
 registerTool(
@@ -3961,7 +4047,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 73: keap_list_automation_ids
+// TOOL 75: keap_list_automation_ids
 // API: GET /v2/automations/ids
 // ---------------------------------------------------------------------------
 registerTool(
@@ -4002,7 +4088,7 @@ Returns:
 );
 
 // ---------------------------------------------------------------------------
-// TOOL 74: keap_list_automation_categories
+// TOOL 76: keap_list_automation_categories
 // API: GET /v2/automationCategory
 // ---------------------------------------------------------------------------
 registerTool(
