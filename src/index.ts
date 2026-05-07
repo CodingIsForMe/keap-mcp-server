@@ -22,6 +22,7 @@
 import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import express from "express";
 import { z } from "zod";
 
@@ -34,6 +35,10 @@ const SERVER_VERSION = "1.0.0";
 const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL || "";
 const REQUEST_TIMEOUT = 30000;
 const CHARACTER_LIMIT = 50000;
+const AUTO_CONTACT_OPT_IN_ENABLED = (process.env.KEAP_AUTO_CONTACT_OPT_IN_ENABLED ?? "true").toLowerCase() !== "false";
+const AUTO_CONTACT_OPT_IN_REASON = process.env.KEAP_AUTO_CONTACT_OPT_IN_REASON || "requested information";
+const WEBHOOK_NETWORK_RETRIES = Math.max(0, Number.parseInt(process.env.MAKE_WEBHOOK_NETWORK_RETRIES ?? "2", 10) || 0);
+const WEBHOOK_RETRY_DELAY_MS = Math.max(0, Number.parseInt(process.env.MAKE_WEBHOOK_NETWORK_RETRY_DELAY_MS ?? "500", 10) || 0);
 
 // =============================================================================
 // Types
@@ -125,6 +130,10 @@ function transformQueryParamsToKeyValueArray(
   return result;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Send request to Make.com webhook for Keap API execution
  */
@@ -149,84 +158,110 @@ async function sendToMakeWebhook(payload: MakeWebhookPayload): Promise<MakeWebho
     ...(routingKey ? { account: routingKey } : {})
   };
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  for (let attempt = 0; attempt <= WEBHOOK_NETWORK_RETRIES; attempt += 1) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
-    const response = await fetch(MAKE_WEBHOOK_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify(cleanedPayload),
-      signal: controller.signal
-    });
+      const response = await fetch(MAKE_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(cleanedPayload),
+        signal: controller.signal
+      });
 
-    clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
 
-    const contentType = response.headers.get("content-type");
-    let responseData: unknown;
+      const contentType = response.headers.get("content-type");
+      let responseData: unknown;
 
-    if (contentType?.includes("application/json")) {
-      responseData = await response.json();
-    } else {
-      responseData = await response.text();
-    }
+      if (contentType?.includes("application/json")) {
+        responseData = await response.json();
+      } else {
+        responseData = await response.text();
+      }
 
-    if (!response.ok) {
-      return {
-        success: false,
-        status_code: response.status,
-        error: `Make.com webhook returned status ${response.status}`,
-        error_details: responseData
-      };
-    }
-
-    // Handle response format from Make.com
-    if (typeof responseData === "object" && responseData !== null) {
-      const data = responseData as Record<string, unknown>;
-
-      if (data.error || data.success === false) {
+      if (!response.ok) {
         return {
           success: false,
+          status_code: response.status,
+          error: `Make.com webhook returned status ${response.status}`,
+          error_details: responseData
+        };
+      }
+
+      // Handle response format from Make.com
+      if (typeof responseData === "object" && responseData !== null) {
+        const data = responseData as Record<string, unknown>;
+
+        if (data.error || data.success === false) {
+          return {
+            success: false,
+            status_code: (data.status_code as number) || response.status,
+            error: (data.error as string) || "Keap API returned an error",
+            error_details: data.error_details || data
+          };
+        }
+
+        return {
+          success: true,
           status_code: (data.status_code as number) || response.status,
-          error: (data.error as string) || "Keap API returned an error",
-          error_details: data.error_details || data
+          data: data.data !== undefined ? data.data : data
         };
       }
 
       return {
         success: true,
-        status_code: (data.status_code as number) || response.status,
-        data: data.data !== undefined ? data.data : data
+        status_code: response.status,
+        data: responseData
       };
-    }
+    } catch (error) {
+      const isRetryableNetworkError = error instanceof Error &&
+        (error.name === "AbortError" || error.message.toLowerCase().includes("fetch failed"));
 
-    return {
-      success: true,
-      status_code: response.status,
-      data: responseData
-    };
+      if (isRetryableNetworkError && attempt < WEBHOOK_NETWORK_RETRIES) {
+        const delay = WEBHOOK_RETRY_DELAY_MS * (attempt + 1);
+        if (delay > 0) {
+          await sleep(delay);
+        }
+        continue;
+      }
 
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.name === "AbortError") {
+      if (error instanceof Error) {
+        if (error.name === "AbortError") {
+          return {
+            success: false,
+            error: `Request timed out after ${REQUEST_TIMEOUT / 1000} seconds`,
+            error_details: {
+              retries_attempted: attempt,
+              retry_limit: WEBHOOK_NETWORK_RETRIES
+            }
+          };
+        }
         return {
           success: false,
-          error: `Request timed out after ${REQUEST_TIMEOUT / 1000} seconds`
+          error: `Failed to connect to Make.com webhook: ${error.message}`,
+          error_details: {
+            retries_attempted: attempt,
+            retry_limit: WEBHOOK_NETWORK_RETRIES,
+            cause: `${(error as Error & { cause?: unknown }).cause ?? ""}`
+          }
         };
       }
       return {
         success: false,
-        error: `Failed to connect to Make.com webhook: ${error.message}`
+        error: "Unknown error occurred"
       };
     }
-    return {
-      success: false,
-      error: "Unknown error occurred"
-    };
   }
+
+  return {
+    success: false,
+    error: "Failed to connect to Make.com webhook after retries"
+  };
 }
 
 /**
@@ -257,6 +292,91 @@ function formatToolResponse(response: MakeWebhookResponse): { success: boolean; 
 function normalizeCommaList(value?: string | string[]): string | undefined {
   if (!value) return undefined;
   return Array.isArray(value) ? value.join(",") : value;
+}
+
+function asTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function extractEmailsFromEmailAddressArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const emails: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      const email = asTrimmedString(item);
+      if (email) emails.push(email);
+      continue;
+    }
+    if (!item || typeof item !== "object") continue;
+
+    const record = item as Record<string, unknown>;
+    const email = asTrimmedString(record.email) ?? asTrimmedString(record.email_address);
+    if (email) emails.push(email);
+  }
+  return emails;
+}
+
+function dedupeEmails(emails: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const email of emails) {
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(email);
+  }
+
+  return unique;
+}
+
+function extractEmailsForAutoOptIn(source: unknown): string[] {
+  if (!source || typeof source !== "object") return [];
+  const root = source as Record<string, unknown>;
+  const emails: string[] = [];
+
+  emails.push(...extractEmailsFromEmailAddressArray(root.email_addresses));
+
+  const topLevelEmail = asTrimmedString(root.email);
+  if (topLevelEmail) emails.push(topLevelEmail);
+
+  const nestedCandidates = [root.contact, root.data];
+  for (const nested of nestedCandidates) {
+    if (!nested || typeof nested !== "object") continue;
+    const nestedRecord = nested as Record<string, unknown>;
+    emails.push(...extractEmailsFromEmailAddressArray(nestedRecord.email_addresses));
+
+    const nestedEmail = asTrimmedString(nestedRecord.email);
+    if (nestedEmail) emails.push(nestedEmail);
+  }
+
+  return dedupeEmails(emails);
+}
+
+function extractContactIdFromResponseData(source: unknown): string | undefined {
+  if (!source || typeof source !== "object") return undefined;
+  const root = source as Record<string, unknown>;
+
+  const directId = root.id ?? root.contact_id;
+  if (directId !== undefined && directId !== null) {
+    const asString = String(directId).trim();
+    if (asString) return asString;
+  }
+
+  const nestedCandidates = [root.contact, root.data];
+  for (const nested of nestedCandidates) {
+    if (!nested || typeof nested !== "object") continue;
+    const nestedRecord = nested as Record<string, unknown>;
+    const nestedId = nestedRecord.id ?? nestedRecord.contact_id;
+    if (nestedId === undefined || nestedId === null) continue;
+    const asString = String(nestedId).trim();
+    if (asString) return asString;
+  }
+
+  return undefined;
 }
 
 interface ContactBodyValidationResult {
@@ -2546,7 +2666,11 @@ Args:
   - body (object, required): Contact fields (email_addresses or phone_numbers required)
 
 Returns:
-  Created contact object.`,
+  Created contact object.
+
+Automatic behavior:
+  - If one or more email addresses are present, this tool also updates each email's status to opted_in=true
+    with reason="${AUTO_CONTACT_OPT_IN_REASON}" via PATCH /v2/emailAddresses/{email}/status.`,
   withRoutingShape(CreateContactV2InputSchema.shape),
   async (params: CreateContactV2Input) => {
     const query_params: Record<string, string | number | boolean | undefined> = {
@@ -2560,10 +2684,69 @@ Returns:
       body: params.body
     }));
 
+    if (!response.success) {
+      const result = formatToolResponse(response);
+      return {
+        content: [{ type: "text" as const, text: result.content }],
+        isError: true
+      };
+    }
+
+    if (!AUTO_CONTACT_OPT_IN_ENABLED) {
+      const result = formatToolResponse(response);
+      return {
+        content: [{ type: "text" as const, text: result.content }],
+        isError: false
+      };
+    }
+
+    const emails = dedupeEmails([
+      ...extractEmailsForAutoOptIn(response.data),
+      ...extractEmailsForAutoOptIn(params.body)
+    ]);
+
+    if (emails.length > 0) {
+      const failures: Array<{ email: string; error: string; details?: unknown }> = [];
+
+      for (const email of emails) {
+        const statusResponse = await sendToMakeWebhook(withRouting(params, {
+          // Keep parity with the explicit keap_update_email_address_status tool path format.
+          path: `/v2/emailAddresses/${email}/status`,
+          method: "PATCH",
+          body: {
+            opted_in: true,
+            reason: AUTO_CONTACT_OPT_IN_REASON
+          }
+        }));
+
+        if (!statusResponse.success) {
+          failures.push({
+            email,
+            error: statusResponse.error || "Unknown error",
+            details: statusResponse.error_details
+          });
+        }
+      }
+
+      if (failures.length > 0) {
+        const partialFailure = {
+          message: "Contact was created, but automatic email opt-in update failed for one or more email addresses.",
+          contact_id: extractContactIdFromResponseData(response.data),
+          failed_email_status_updates: failures,
+          recovery_hint: `Retry keap_update_email_address_status for failed emails with body { "opted_in": true, "reason": "${AUTO_CONTACT_OPT_IN_REASON}" }`
+        };
+
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(partialFailure, null, 2) }],
+          isError: true
+        };
+      }
+    }
+
     const result = formatToolResponse(response);
     return {
       content: [{ type: "text" as const, text: result.content }],
-      isError: !result.success
+      isError: false
     };
   }
 );
@@ -4128,11 +4311,19 @@ async function runServer() {
     process.exit(1);
   }
 
+  const transportType = (process.env.TRANSPORT || "sse").toLowerCase();
+  if (transportType === "stdio") {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
+    return;
+  }
+
   const app = express();
   let transport: SSEServerTransport;
 
   app.get("/sse", async (req, res) => {
-    console.log("New SSE connection established");
+    console.error("New SSE connection established");
     transport = new SSEServerTransport("/messages", res);
     await server.connect(transport);
   });
@@ -4147,9 +4338,9 @@ async function runServer() {
 
   const PORT = process.env.PORT || 8080;
   app.listen(PORT, () => {
-    console.log(`${SERVER_NAME} v${SERVER_VERSION} running on port ${PORT}`);
-    console.log(`SSE endpoint: http://localhost:${PORT}/sse`);
-    console.log(`Webhook: ${MAKE_WEBHOOK_URL.substring(0, 40)}...`);
+    console.error(`${SERVER_NAME} v${SERVER_VERSION} running on port ${PORT}`);
+    console.error(`SSE endpoint: http://localhost:${PORT}/sse`);
+    console.error(`Webhook: ${MAKE_WEBHOOK_URL.substring(0, 40)}...`);
   });
 }
 
