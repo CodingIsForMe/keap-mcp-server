@@ -4311,8 +4311,22 @@ async function runServer() {
     process.exit(1);
   }
 
-  const transportType = (process.env.TRANSPORT || "sse").toLowerCase();
+  const rawTransportType = process.env.TRANSPORT ?? process.env.MCP_TRANSPORT ?? "stdio";
+  const transportType = rawTransportType
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .toLowerCase();
+  console.error(`Selected transport raw=${JSON.stringify(rawTransportType)} normalized=${transportType}`);
+
   if (transportType === "stdio") {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
+    return;
+  }
+
+  if (transportType !== "sse" && transportType !== "http") {
+    console.error(`Unknown transport "${transportType}", defaulting to stdio.`);
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error(`${SERVER_NAME} v${SERVER_VERSION} running on stdio`);
